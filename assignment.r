@@ -8,7 +8,7 @@ library(forcats)
 # 2. Load Dataset
 # ===============================
 # Change to your actual file path!
-df <- read.csv("C:/Users/User/OneDrive/Documents/Master of Data Science/Sem1/Programming for data science/heart_disease_health_indicators_BRFSS2015.csv")
+df <- read.csv("heart_disease_missing_simulated.csv")
 
 # ===============================
 # 3. Basic Dataset Information
@@ -81,8 +81,22 @@ hist(df$BMI, main="BMI Distribution", xlab="BMI", col="skyblue", border="white")
 df_clean <- df
 
 ## 8.1 Check and handle missing value
-total_na <- sum(is.na(df_clean))
-cat("Total missing values before cleaning:", total_na, "\n")
+# BEFORE dropping
+cat("Total rows before dropping missing values:", nrow(df_clean), "\n")
+
+# Print missing values per column
+cat("\nMissing values per column:\n")
+print(colSums(is.na(df_clean)))
+
+# Count rows that contain at least one missing value
+rows_with_na <- sum(!complete.cases(df_clean))
+cat("\nNumber of rows containing at least one missing value:", rows_with_na, "\n")
+
+# Drop rows with ANY missing value
+df_clean <- df_clean %>% drop_na()
+
+# AFTER dropping
+cat("\nTotal rows after dropping missing values:", nrow(df_clean), "\n")
 
 ## 8.2 Remove duplicate rows
 dup_n <- sum(duplicated(df_clean))
@@ -155,5 +169,130 @@ df_clean %>%
   head(10)
 
 table(df_clean$PhysHlth)
+
+# ------------------------------------------------------
+# 8.6 Convert variables to appropriate types (factors)
+# ------------------------------------------------------
+
+df_clean <- df_clean %>%
+  mutate(
+    # Binary yes/no variables → factors
+    across(
+      c(HeartDiseaseorAttack, HighBP, HighChol, CholCheck,
+        Smoker, Stroke, PhysActivity, Fruits, Veggies,
+        HvyAlcoholConsump, AnyHealthcare, NoDocbcCost,
+        DiffWalk, Sex),
+      ~ factor(.)
+    ),
+    # Categorical codes → ordered factors
+    Age       = factor(Age,       ordered = TRUE),
+    Education = factor(Education, ordered = TRUE),
+    Income    = factor(Income,    ordered = TRUE),
+    Diabetes  = factor(Diabetes)   # 0/1/2 as categories
+  )
+
+  head(df_clean, 20)
+
+# =========================================================
+# 9. Full-feature correlation analysis (memory safe)
+# =========================================================
+
+library(corrplot)
+
+# 1) Build a numeric-only version of df_clean
+#    - Encode HeartDiseaseorAttack as numeric 0/1
+#    - Convert ALL remaining factors to numeric codes
+df_corr <- df_clean %>%
+  mutate(
+    HeartDisease_num = as.numeric(as.character(HeartDiseaseorAttack))
+  ) %>%
+  select(-HeartDiseaseorAttack) %>%       # avoid duplicate target
+  mutate(
+    across(where(is.factor), ~ as.numeric(.))   # all factors -> numeric codes
+  )
+
+# Optional: check dimensions (should be features x features later)
+cat("Number of features used for correlation:", ncol(df_corr), "\n")
+
+# 2) Compute correlation matrix across ALL features
+cor_mat <- cor(df_corr, use = "pairwise.complete.obs")
+
+# Quick sanity check
+dim(cor_mat)
+# Should be something like 23 x 23 (depending on how many columns you have)
+
+# 3) Plot full correlation heatmap
+corrplot(cor_mat,
+         method = "color",
+         type   = "upper",
+         tl.col = "black",
+         tl.srt = 45,
+         number.cex = 0.5,
+         main  = "Correlation Heatmap of All Features")
+
+# 4) Correlation list for BMI (regression task)
+if ("BMI" %in% rownames(cor_mat)) {
+  bmi_cor <- sort(cor_mat["BMI", ], decreasing = TRUE)
+  cat("\nCorrelation with BMI:\n")
+  print(round(bmi_cor, 3))
+} else {
+  warning("BMI not found in correlation matrix row names.")
+}
+
+# 5) Correlation list for HeartDisease (classification task)
+if ("HeartDisease_num" %in% rownames(cor_mat)) {
+  hd_cor <- sort(cor_mat["HeartDisease_num", ], decreasing = TRUE)
+  cat("\nCorrelation with HeartDiseaseorAttack (0/1):\n")
+  print(round(hd_cor, 3))
+} else {
+  warning("HeartDisease_num not found in correlation matrix row names.")
+}
+
+
+# ------------------------------------------------------
+# 10. Normalization (z-score) for numeric predictors
+# ------------------------------------------------------
+
+# Create scaled versions of continuous variables
+df_model <- df_clean %>%
+  mutate(
+    BMI_scaled          = as.numeric(scale(BMI)),
+    BMI_capped_scaled   = as.numeric(scale(BMI_capped)),
+    MentHlth_scaled     = as.numeric(scale(MentHlth)),
+    PhysHlth_scaled     = as.numeric(scale(PhysHlth))
+  )
+
+# Quick check
+summary(df_model[, c("BMI", "BMI_scaled",
+                     "BMI_capped", "BMI_capped_scaled",
+                     "MentHlth", "MentHlth_scaled",
+                     "PhysHlth", "PhysHlth_scaled")])
+
+
+# ============================================================
+# 11. Train–Validation–Test Split (60% / 20% / 20%)
+# ============================================================
+
+set.seed(123)  # reproducibility
+
+n <- nrow(df_model)
+indices <- sample(seq_len(n))
+
+# Compute split sizes
+train_size <- floor(0.6 * n)
+valid_size <- floor(0.2 * n)
+
+# Generate splits
+train_data <- df_model[indices[1:train_size], ]
+valid_data <- df_model[indices[(train_size + 1):(train_size + valid_size)], ]
+test_data  <- df_model[indices[(train_size + valid_size + 1):n], ]
+
+# Print sizes
+cat("Training rows:", nrow(train_data), "\n")
+cat("Validation rows:", nrow(valid_data), "\n")
+cat("Test rows:", nrow(test_data), "\n")
+
+
+
 
 
