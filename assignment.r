@@ -170,28 +170,185 @@ df_clean %>%
 
 table(df_clean$PhysHlth)
 
-# ------------------------------------------------------
-# 8.6 Convert variables to appropriate types (factors)
-# ------------------------------------------------------
-
+# -----------------------------------------------------
+# Convert Age Code to Meaningful Age Group (CDC Mapping)
+# -----------------------------------------------------
+# The Age variable is coded from 1–13 and represents age ranges, not actual age.
+# We map each code to the correct age group and treat it as ordered categorical data.
 df_clean <- df_clean %>%
   mutate(
-    # Binary yes/no variables → factors
-    across(
-      c(HeartDiseaseorAttack, HighBP, HighChol, CholCheck,
-        Smoker, Stroke, PhysActivity, Fruits, Veggies,
-        HvyAlcoholConsump, AnyHealthcare, NoDocbcCost,
-        DiffWalk, Sex),
-      ~ factor(.)
-    ),
-    # Categorical codes → ordered factors
-    Age       = factor(Age,       ordered = TRUE),
-    Education = factor(Education, ordered = TRUE),
-    Income    = factor(Income,    ordered = TRUE),
-    Diabetes  = factor(Diabetes)   # 0/1/2 as categories
+    AgeGroup = factor(Age,
+                      levels = 1:13,
+                      labels = c(
+                        "18-24", "25-29", "30-34", "35-39", "40-44",
+                        "45-49", "50-54", "55-59", "60-64",
+                        "65-69", "70-74", "75-79", "80+"
+                      ),
+                      ordered = TRUE
+    )
   )
 
-  head(df_clean, 20)
+# Display first 10 rows to verify AgeGroup conversion
+df_clean %>% 
+  select(Age, AgeGroup) %>% 
+  head(10)
+
+# Frequency of each age group
+table(df_clean$AgeGroup)
+
+
+
+# -----------------------------------------------------
+# ️Create Broader Age Bands
+# -----------------------------------------------------
+# Group AgeCategory into wider age bands to simplify modeling and interpretation.
+df_clean <- df_clean %>%
+  mutate(
+    AgeBand = case_when(
+      Age <= 3  ~ "18-34",   # Young adults
+      Age <= 6  ~ "35-49",   # Middle age
+      Age <= 9  ~ "50-64",   # Older adults
+      Age <= 11 ~ "65-74",   # Elderly
+      TRUE      ~ "75+"      # Very elderly
+    ),
+    AgeBand = factor(AgeBand, ordered = TRUE)
+  )
+
+# Display AgeBand mapping
+df_clean %>% 
+  select(Age, AgeBand) %>% 
+  head(10)
+
+# Frequency of age bands
+table(df_clean$AgeBand)
+
+
+
+# -----------------------------------------------------
+# Lifestyle Risk Score (Composite Feature)
+# -----------------------------------------------------
+# Combine multiple unhealthy lifestyle behaviors into a single numerical risk score.
+# Higher score indicates less healthy lifestyle.
+df_clean <- df_clean %>%
+  mutate(
+    RiskScore =
+      as.numeric(Smoker) +              # Smoking behavior
+      as.numeric(HvyAlcoholConsump) +   # Heavy drinking behavior
+      (1 - as.numeric(PhysActivity)) +  # Inactivity
+      (1 - as.numeric(Fruits)) +        # Low fruit intake
+      (1 - as.numeric(Veggies))         # Low vegetable intake
+  )
+
+# Inspect calculated RiskScore
+df_clean %>%
+  select(Smoker, HvyAlcoholConsump, PhysActivity, Fruits, Veggies, RiskScore) %>%
+  head(10)
+
+summary(df_clean$RiskScore)
+
+
+
+# -----------------------------------------------------
+# Disease Burden Index (Chronic Disease Count)
+# -----------------------------------------------------
+# Counts the number of existing health conditions per individual.
+# Represents overall comorbidity burden.
+df_clean <- df_clean %>%
+  mutate(
+    DiseaseCount =
+      as.numeric(HighBP) +      # High blood pressure
+      as.numeric(HighChol) +    # High cholesterol
+      as.numeric(Diabetes) +    # Diabetes
+      as.numeric(Stroke)        # History of stroke
+  )
+
+# Inspect disease burden result
+df_clean %>%
+  select(HighBP, HighChol, Diabetes, Stroke, DiseaseCount) %>%
+  head(10)
+
+table(df_clean$DiseaseCount)
+
+
+
+# -----------------------------------------------------
+# Health Stress Index (Mental + Physical Health)
+# -----------------------------------------------------
+# Combines mental and physical unhealthy days into one stress indicator.
+df_clean <- df_clean %>%
+  mutate(
+    HealthStressIndex = MentHlth + PhysHlth
+  )
+
+# Inspect health stress indicator
+df_clean %>% 
+  select(MentHlth, PhysHlth, HealthStressIndex) %>% 
+  head(10)
+
+summary(df_clean$HealthStressIndex)
+
+
+
+# -----------------------------------------------------
+# Healthcare Access Score
+# -----------------------------------------------------
+# Captures access to healthcare services combining insurance and affordability.
+df_clean <- df_clean %>%
+  mutate(
+    HealthcareScore =
+      as.numeric(AnyHealthcare) +       # Has insurance
+      (1 - as.numeric(NoDocbcCost))     # Could afford doctor visit
+  )
+
+# Inspect healthcare access score
+df_clean %>% 
+  select(AnyHealthcare, NoDocbcCost, HealthcareScore) %>% 
+  head(10)
+
+table(df_clean$HealthcareScore)
+
+
+
+# -----------------------------------------------------
+# Obesity Indicator
+# -----------------------------------------------------
+# Create obesity flag using BMI threshold (BMI >= 30 is obese).
+df_clean <- df_clean %>%
+  mutate(
+    ObeseFlag = ifelse(BMI >= 30, 1, 0),
+    ObeseFlag = factor(ObeseFlag)
+  )
+
+# Inspect obesity flag
+df_clean %>% 
+  select(BMI, ObeseFlag) %>% 
+  head(10)
+
+table(df_clean$ObeseFlag)
+
+
+
+# -----------------------------------------------------
+# Lifestyle Risk Category
+# -----------------------------------------------------
+# Convert numeric RiskScore into interpretable risk classes.
+df_clean <- df_clean %>%
+  mutate(
+    LifestyleProfile = case_when(
+      RiskScore <= 1 ~ "Healthy",
+      RiskScore <= 3 ~ "ModerateRisk",
+      TRUE ~ "HighRisk"
+    ),
+    LifestyleProfile = factor(LifestyleProfile)
+  )
+
+# Inspect lifestyle categories
+df_clean %>% 
+  select(RiskScore, LifestyleProfile) %>% 
+  head(10)
+
+table(df_clean$LifestyleProfile)
+
 
 # =========================================================
 # 9. Full-feature correlation analysis (memory safe)
