@@ -1,9 +1,10 @@
 # ===============================
 # 1. Load Libraries
 # ===============================
+#install.packages("tidyverse")
+#install.packages("forcats")
 library(tidyverse)
 library(forcats)
-
 # ===============================
 # 2. Load Dataset
 # ===============================
@@ -349,9 +350,207 @@ df_clean %>%
 
 table(df_clean$LifestyleProfile)
 
+# =========================================================
+# EDA
+# =========================================================
+library(ggplot2)
+library(dplyr)
+library(scales)
+
+df_plot <- df_clean %>%
+  mutate(
+    HeartDisease = factor(HeartDiseaseorAttack,
+                          levels = c(0, 1),
+                          labels = c("No", "Yes")),
+    SexLabel = factor(Sex,
+                      levels = c(0, 1),
+                      labels = c("Female", "Male"))
+  )
+
+# --------------------------------
+# 9.1 Target variable distribution                                              # GOOD
+# --------------------------------
+df_donut <- df_plot %>%
+  count(HeartDisease) %>%
+  mutate(prop = n / sum(n))
+
+ggplot(df_donut, aes(x = 2, y = prop, fill = HeartDisease)) +
+  geom_col(width = 1) +
+  coord_polar(theta = "y") +
+  xlim(0.5, 2.5) +
+  theme_void() +
+  labs(title = "Heart Disease Prevalence (Donut Chart)") +
+  geom_text(aes(label = percent(prop)), 
+            position = position_stack(vjust = 0.5))
+
+# ---------------------------------
+# 9.2 Heart disease rate by AgeBand    
+# ---------------------------------
+# Two choose one(i think below one better)
+
+ggplot(df_plot, aes(x = AgeBand, fill = HeartDisease)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Heart Disease Rate by Age Band",
+       x = "Age Band",
+       y = "Proportion") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+counts <- table(df_plot$HeartDisease)                                           # ok
+barplot(counts,
+        col = "#2C82C9",
+        border = NA,
+        main = "Heart Disease Prevalence",
+        xlab = "Heart Disease",
+        ylab = "Count")
+
+
+# ---------------------------------
+# 9.3 Heart disease rate by Sex    
+# ---------------------------------                
+# Two choose one(i think upper one better)
+ggplot(df_plot, aes(x = SexLabel, fill = HeartDisease)) +                       # ok
+  geom_bar(position = "fill", color = "white") +
+  scale_fill_manual(values = c("#F76C6C", "#1ECBE1")) +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Heart Disease Rate by Sex",
+       x = "Sex",
+       y = "Proportion") +
+  theme_minimal(base_size = 14)
+
+par(mfrow = c(1,2))
+for (sex in levels(df_plot$SexLabel)) {
+  tab <- table(df_plot$HeartDisease[df_plot$SexLabel == sex])
+  pie(tab,
+      col = c("#F76C6C", "#1ECBE1"),
+      main = paste("Heart Disease Rate:", sex))
+}
+par(mfrow = c(1,1))
+
+
+# ---------------------------------
+# 9.4 BMI category vs HeartDisease                                              # ok
+# ---------------------------------   
+ggplot(df_plot, aes(BMI_Category, fill = HeartDisease)) +
+  geom_bar(position = "fill", color = "white") +
+  scale_fill_manual(values = c("#F9A825", "#1976D2")) +
+  labs(title = "Heart Disease Rate by BMI Category",
+       x = "BMI Category",
+       y = "Proportion") +
+  scale_y_continuous(labels = percent) +
+  theme_minimal(base_size = 14)
+
+
+# ---------------------------------
+# 9.5 Obesity flag vs HeartDisease                           
+# ---------------------------------
+# Two choose one(i think below one better)
+ggplot(df_plot, aes(x = ObeseFlag, fill = HeartDisease)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Heart Disease Rate by Obesity Status (BMI ≥ 30)",
+       x = "ObeseFlag (0 = No, 1 = Yes)",
+       y = "Proportion")
+
+ggplot(df_plot, aes(factor(ObeseFlag), fill = HeartDisease)) +                  # ok
+  geom_bar(position = "fill", width = 0.5) +
+  scale_fill_manual(values = c("#81D4FA", "#EF5350")) +
+  labs(title = "Heart Disease Rate by Obesity Status",
+       x = "Obesity (0 = No, 1 = Yes)",
+       y = "Proportion") +
+  scale_y_continuous(labels = percent) +
+  theme_minimal(base_size = 14)
+
+# -------------------------------------
+# 9.6 LifestyleProfile vs HeartDisease                        
+# -------------------------------------
+# Two choose one(i think below one better)
+ggplot(df_plot, aes(LifestyleProfile, fill = HeartDisease)) +
+  geom_bar(position = "fill", color = "white") +
+  scale_fill_manual(values = c("#43A047", "#EF5350")) +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Heart Disease Rate by Lifestyle Profile",
+       x = "Lifestyle Category",
+       y = "Proportion") +
+  theme_minimal(base_size = 14)
+
+tab <- table(df_plot$LifestyleProfile, df_plot$HeartDisease)                    # ok
+barplot(prop.table(tab, 1),
+        beside = FALSE,
+        col = c("#43A047", "#EF5350"),
+        legend = TRUE,
+        main = "Heart Disease Rate by Lifestyle Profile")
+
+
+# -------------------------------------
+# 9.7 General health (GenHlth_Factor)                                           # ok                       
+# -------------------------------------
+ggplot(df_plot, aes(x = GenHlth_Factor, fill = HeartDisease)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Heart Disease Rate by Self-Reported General Health",
+       x = "General Health",
+       y = "Proportion") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#--------------These 2 no idea need or not(if no need drop it)---------------------------------------------------
+# -------------------------------------
+# 9.8 DiseaseCount vs HeartDisease                     
+# -------------------------------------
+ggplot(df_plot, aes(x = factor(DiseaseCount), fill = HeartDisease)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Heart Disease Rate by Disease Burden",
+       x = "Number of Chronic Conditions",
+       y = "Proportion")
+
+# --------------------------------------------------------
+# 9.9 HealthStressIndex distribution (MentHlth + PhysHlth)                     
+# --------------------------------------------------------
+ggplot(df_plot, aes(x = HealthStressIndex)) +
+  geom_histogram(binwidth = 2, fill = "darkseagreen3", color = "white") +
+  labs(title = "Health Stress Index Distribution",
+       x = "HealthStressIndex (MentHlth + PhysHlth)",
+       y = "Count")
+
+#----------------------------------------------------------------------------------------------------------------
+
+# --------------------------------------
+# 9.10 HealthStressIndex vs HeartDisease                         
+# --------------------------------------
+# Two choose one(i think below one better)
+ggplot(df_plot, aes(x = HeartDisease, y = HealthStressIndex, fill = HeartDisease)) +
+  geom_boxplot() +
+  labs(title = "Health Stress Index by Heart Disease Status",
+       x = "Heart Disease or Attack",
+       y = "HealthStressIndex")
+
+boxplot(HealthStressIndex ~ HeartDisease,                                       # ok
+        data = df_plot,
+        col = c("#4DB6AC", "#FF7043"),
+        main = "Health Stress Index by Heart Disease",
+        xlab = "Heart Disease",
+        ylab = "Health Stress Index")
+
+
+# -----------------------------------------
+# 9.10 Healthcare Access Score Distribution                                     # ok                      
+# -----------------------------------------
+df_healthcare <- df_plot %>%
+  group_by(HealthcareScore) %>%
+  summarise(Count = n()) %>%
+  mutate(Percent = Count / sum(Count))
+
+ggplot(df_healthcare, aes(x = factor(HealthcareScore), y = Percent)) +
+  geom_col(fill = "olivedrab3") +
+  geom_text(aes(label = percent(Percent)), vjust = -0.5) +
+  labs(title = "Healthcare Access Score Distribution (Waffle-style Bar)",
+       x = "Healthcare Score",
+       y = "Percent")
+
 
 # =========================================================
-# 9. Full-feature correlation analysis (memory safe)
+# 10. Full-feature correlation analysis (memory safe)
 # =========================================================
 
 library(corrplot)
@@ -378,6 +577,13 @@ cor_mat <- cor(df_corr, use = "pairwise.complete.obs")
 dim(cor_mat)
 # Should be something like 23 x 23 (depending on how many columns you have)
 
+
+#=========================================================================================
+#=========================================================================================
+#=========================================================================================
+#=========================================================================================
+### Choose One heatmap
+#=========================================================================================
 # 3) Plot full correlation heatmap
 corrplot(cor_mat,
          method = "color",
@@ -386,6 +592,50 @@ corrplot(cor_mat,
          tl.srt = 45,
          number.cex = 0.5,
          main  = "Correlation Heatmap of All Features")
+#=========================================================================================
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+cor_long <- cor_mat %>%
+  as.data.frame() %>%
+  mutate(Var1 = rownames(.)) %>%
+  pivot_longer(-Var1, names_to = "Var2", values_to = "value")
+
+ggplot(cor_long, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white", size = 0.2) +
+  scale_fill_gradient2(
+    low = "#6BAED6", mid = "white", high = "#DE2D26",
+    midpoint = 0, limit = c(-1, 1), name = "Correlation"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 60, vjust = 1, hjust = 1),
+    panel.grid = element_blank()
+  ) +
+  labs(
+    title = "Correlation Heatmap (ggplot2)",
+    x = "",
+    y = ""
+  )
+
+#=========================================================================================
+#This one better?can hover see the value
+#=========================================================================================
+#install.packages("heatmaply")
+library(heatmaply)
+heatmaply(
+  cor_mat,
+  colors = colorRampPalette(c("#2166AC", "white", "#B2182B"))(200),
+  k_row = 3,
+  k_col = 3,
+  main = "Interactive Correlation Heatmap"
+)
+
+#=========================================================================================
+#=========================================================================================
+#=========================================================================================
+#=========================================================================================
 
 # 4) Correlation list for BMI (regression task)
 if ("BMI" %in% rownames(cor_mat)) {
@@ -407,7 +657,7 @@ if ("HeartDisease_num" %in% rownames(cor_mat)) {
 
 
 # ------------------------------------------------------
-# 10. Normalization (z-score) for numeric predictors
+# 11. Normalization (z-score) for numeric predictors
 # ------------------------------------------------------
 
 # Create scaled versions of continuous variables
@@ -427,7 +677,7 @@ summary(df_model[, c("BMI", "BMI_scaled",
 
 
 # ============================================================
-# 11. Train–Validation–Test Split (60% / 20% / 20%)
+# 12. Train–Validation–Test Split (60% / 20% / 20%)
 # ============================================================
 
 set.seed(123)  # reproducibility
@@ -448,8 +698,5 @@ test_data  <- df_model[indices[(train_size + valid_size + 1):n], ]
 cat("Training rows:", nrow(train_data), "\n")
 cat("Validation rows:", nrow(valid_data), "\n")
 cat("Test rows:", nrow(test_data), "\n")
-
-
-
 
 
