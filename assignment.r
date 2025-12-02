@@ -678,6 +678,7 @@ summary(df_model[, c("BMI", "BMI_scaled",
 
 # ============================================================
 # 12. Train–Validation–Test Split (60% / 20% / 20%)
+#    -> create indices ONCE and reuse for all datasets
 # ============================================================
 
 set.seed(123)  # reproducibility
@@ -689,14 +690,79 @@ indices <- sample(seq_len(n))
 train_size <- floor(0.6 * n)
 valid_size <- floor(0.2 * n)
 
-# Generate splits
-train_data <- df_model[indices[1:train_size], ]
-valid_data <- df_model[indices[(train_size + 1):(train_size + valid_size)], ]
-test_data  <- df_model[indices[(train_size + valid_size + 1):n], ]
+# Row indices for each split
+train_idx <- indices[1:train_size]
+valid_idx <- indices[(train_size + 1):(train_size + valid_size)]
+test_idx  <- indices[(train_size + valid_size + 1):n]
 
-# Print sizes
-cat("Training rows:", nrow(train_data), "\n")
-cat("Validation rows:", nrow(valid_data), "\n")
-cat("Test rows:", nrow(test_data), "\n")
+# (Optional) If you still want these for general use:
+train_data <- df_model[train_idx, ]
+valid_data <- df_model[valid_idx, ]
+test_data  <- df_model[test_idx, ]
+
+cat("Training rows:", length(train_idx), "\n")
+cat("Validation rows:", length(valid_idx), "\n")
+cat("Test rows:",      length(test_idx),  "\n")
+
+# ============================================================
+# 13A. Regression task dataset
+# ============================================================
+
+df_reg <- df_model %>%
+  select(
+    BMI,
+    everything()
+  )
+
+# Use integer indices, NOT data frames
+train_reg <- df_reg[train_idx, ]
+valid_reg <- df_reg[valid_idx, ]
+test_reg  <- df_reg[test_idx, ]
+
+cat("\n[Regression] Rows in train/valid/test:\n")
+cat("Train:", nrow(train_reg), "\n")
+cat("Valid:", nrow(valid_reg), "\n")
+cat("Test:",  nrow(test_reg),  "\n")
+
+view(df_reg)
+# ============================================================
+# 13B. Classification task dataset
+# ============================================================
+
+df_clf <- df_model %>%
+  mutate(
+    HeartDisease = factor(
+      HeartDiseaseorAttack,
+      levels = c(0, 1),
+      labels = c("No", "Yes")
+    )
+  ) %>%
+  select(
+    HeartDisease,
+    everything()
+  )
+
+train_clf <- df_clf[train_idx, ]
+valid_clf <- df_clf[valid_idx, ]
+test_clf  <- df_clf[test_idx, ]
+
+cat("\n[Classification] Rows in train/valid/test:\n")
+cat("Train:", nrow(train_clf), "\n")
+cat("Valid:", nrow(valid_clf), "\n")
+cat("Test:",  nrow(test_clf),  "\n")
+view(df_clf)
+
+
+# ============================================================
+# 14. Modelling
+# ============================================================
+# ============================================================
+# 14A. Classification 
+# ============================================================
+
+
+# ============================================================
+# 14B. Regression
+# ============================================================
 
 
