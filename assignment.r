@@ -9,9 +9,9 @@ library(forcats)
 # 2. Load Dataset
 # ===============================
 # Change to your actual file path!
-df <- read.csv("heart_disease_missing_simulated.csv")
+df <- read.csv("C://Users//Wei Khang//heartDisease//heart_disease_missing_simulated.csv")
 
-# ===============================
+ 
 # 3. Basic Dataset Information
 # ===============================
 
@@ -707,12 +707,20 @@ cat("Test rows:",      length(test_idx),  "\n")
 # ============================================================
 # 13A. Regression task dataset
 # ============================================================
-
+# 1) Drop BMI-leak features
 df_reg <- df_model %>%
   select(
-    BMI,
-    everything()
+    -BMI_scaled,
+    -BMI_capped,
+    -BMI_capped_scaled,
+    -BMI_Category,
+    -ObeseFlag
   )
+
+# 2) Move BMI to the first column (optional but nice)
+df_reg <- df_reg %>%
+  relocate(BMI)
+
 
 # Use integer indices, NOT data frames
 train_reg <- df_reg[train_idx, ]
@@ -725,6 +733,7 @@ cat("Valid:", nrow(valid_reg), "\n")
 cat("Test:",  nrow(test_reg),  "\n")
 
 view(df_reg)
+rm(df_reg)
 # ============================================================
 # 13B. Classification task dataset
 # ============================================================
@@ -759,10 +768,376 @@ view(df_clf)
 # ============================================================
 # 14A. Classification 
 # ============================================================
+# ============================================================
+# 14B. Regression 
+# ============================================================
 
 
+library(randomForest)
+library(xgboost)
+library(caret)
+library(ggplot2)
+
 # ============================================================
-# 14B. Regression
+# PART 1: RANDOM FOREST MODEL
 # ============================================================
+
+cat("\n========================================\n")
+cat("RANDOM FOREST MODEL\n")
+cat("========================================\n\n")
+
+# Set seed for reproducibility
+set.seed(123)
+
+# ------------------------------------------------------------
+# 1.1 Train Random Forest Model
+# ------------------------------------------------------------
+
+cat("Training Random Forest model...\n")
+
+# Train model with tuned parameters
+#rf_model <- randomForest(
+#  BMI ~ .,                           # Predict BMI using all features
+#  data = train_reg,
+#  ntree = 100,                       # Number of trees
+#  mtry = 8,                          # Number of variables tried at each split
+#  importance = TRUE,                 # Calculate feature importance
+#  nodesize = 5,                      # Minimum size of terminal nodes
+#  maxnodes = NULL,                   # Maximum number of terminal nodes
+#  keep.forest = TRUE
+#)
+
+install.packages("ranger")
+
+library(ranger)
+
+rf_model_fast <- ranger(
+  BMI ~ .,
+  data = train_reg,
+  num.trees = 500,
+  mtry = 8,
+  min.node.size = 5,
+  importance = "impurity",   
+  num.threads = parallel::detectCores()  # use all CPU cores
+)
+
+print(rf_model_fast)
+
+# ------------------------------------------------------------
+# 1.3 Make Predictions
+# ------------------------------------------------------------
+# ------------------------------------------------------------
+# 1.3 Make Predictions  (FIXED)
+# ------------------------------------------------------------
+
+cat("\n--- Making Predictions ---\n")
+
+pred_rf_train <- predict(rf_model_fast, data = train_reg)$predictions
+pred_rf_valid <- predict(rf_model_fast, data = valid_reg)$predictions
+pred_rf_test  <- predict(rf_model_fast, data = test_reg)$predictions
+
+# ------------------------------------------------------------
+# 1.4 Evaluate Random Forest
+# ------------------------------------------------------------
+library(Metrics)
+cat("\n--- Random Forest Performance ---\n")
+
+rf_test_rmse    <- rmse(test_reg$BMI, pred_rf_test)
+rf_test_mae     <- mae(test_reg$BMI, pred_rf_test)
+rf_test_mape    <- mape(test_reg$BMI, pred_rf_test)
+rf_test_r2      <- r2(test_reg$BMI, pred_rf_test)
+rf_test_adj_r2  <- adjusted_r2(test_reg$BMI, pred_rf_test,
+                               nrow(test_reg), ncol(test_reg) - 1)
+
+cat(sprintf(
+  "Test       -> RMSE: %.4f | MAE: %.4f | MAPE: %.2f%% | R²: %.4f | Adj R²: %.4f\n",
+  rf_test_rmse, rf_test_mae, rf_test_mape,
+  rf_test_r2, rf_test_adj_r2
+))
+
+
+
+
+cat("\n========================================\n")
+cat("XGBOOST MODEL\n")
+cat("========================================\n\n")
+
+# ------------------------------------------------------------
+# 2.1 Prepare Data for XGBoost
+# ------------------------------------------------------------
+
+cat("Preparing data for XGBoost...\n")
+
+# Convert to matrix format (XGBoost requires numeric matrix)
+X_train <- model.matrix(BMI ~ ., data = train_reg)[, -1]
+y_train <- train_reg$BMI
+
+X_valid <- model.matrix(BMI ~ ., data = valid_reg)[, -1]
+y_valid <- valid_reg$BMI
+
+X_test <- model.matrix(BMI ~ ., data = test_reg)[, -1]
+y_test <- test_reg$BMI
+
+# Create DMatrix objects (XGBoost's data structure)
+dtrain <- xgb.DMatrix(data = X_train, label = y_train)
+dvalid <- xgb.DMatrix(data = X_valid, label = y_valid)
+dtest <- xgb.DMatrix(data = X_test, label = y_test)
+
+cat(sprintf("Training features: %d rows x %d columns\n", 
+            nrow(X_train), ncol(X_train)))
+
+# ------------------------------------------------------------
+# 2.2 XGBoost Hyperparameter Grid Search
+# ------------------------------------------------------------
+
+cat("\n--- XGBoost Hyperparameter Grid Search ---\n")
+
+# Define parameter grid
+xgb_grid <- expand.grid(
+  eta = c(0.01, 0.05, 0.1),                    # Learning rate
+  max_depth = c(3, 6, 9),                      # Tree depth
+  min_child_weight = c(1, 3, 5),               # Minimum child weight
+  subsample = c(0.7, 0.8, 0.9),                # Row sampling
+  colsample_bytree = c(0.7, 0.8, 0.9),         # Column sampling
+  gamma = c(0, 0.1, 0.2)                       # Minimum split loss
+)
+
+cat(sprintf("Total parameter combinations: %d\n", nrow(xgb_grid)))
+cat("Note: Testing all combinations would take very long.\n")
+cat("Using RANDOM SEARCH with 30 samples...\n\n")
+
+# Random search: sample 30 combinations
+set.seed(123)
+sample_indices <- sample(1:nrow(xgb_grid), min(30, nrow(xgb_grid)))
+xgb_grid_sample <- xgb_grid[sample_indices, ]
+
+# Initialize results
+xgb_tune_results <- data.frame()
+
+# Progress bar setup
+cat("Starting grid search...\n")
+pb <- txtProgressBar(min = 0, max = nrow(xgb_grid_sample), style = 3)
+
+# Grid search loop
+for (i in 1:nrow(xgb_grid_sample)) {
+  
+  # Current parameters
+  params_temp <- list(
+    objective = "reg:squarederror",
+    eta = xgb_grid_sample$eta[i],
+    max_depth = xgb_grid_sample$max_depth[i],
+    min_child_weight = xgb_grid_sample$min_child_weight[i],
+    subsample = xgb_grid_sample$subsample[i],
+    colsample_bytree = xgb_grid_sample$colsample_bytree[i],
+    gamma = xgb_grid_sample$gamma[i],
+    lambda = 1,
+    alpha = 0
+  )
+  
+  # Cross-validation with early stopping
+  xgb_cv_temp <- xgb.cv(
+    params = params_temp,
+    data = dtrain,
+    nrounds = 500,
+    nfold = 3,
+    early_stopping_rounds = 20,
+    verbose = 0,
+    showsd = FALSE
+  )
+  
+  # Get best iteration and score
+  best_iter <- xgb_cv_temp$best_iteration
+  best_rmse <- min(xgb_cv_temp$evaluation_log$test_rmse_mean)
+  
+  # Train on full training set and evaluate on validation
+  xgb_temp <- xgb.train(
+    params = params_temp,
+    data = dtrain,
+    nrounds = best_iter,
+    verbose = 0
+  )
+  
+  pred_valid_temp <- predict(xgb_temp, dvalid)
+  valid_rmse <- rmse(y_valid, pred_valid_temp)
+  
+  # Store results
+  xgb_tune_results <- rbind(xgb_tune_results, data.frame(
+    eta = xgb_grid_sample$eta[i],
+    max_depth = xgb_grid_sample$max_depth[i],
+    min_child_weight = xgb_grid_sample$min_child_weight[i],
+    subsample = xgb_grid_sample$subsample[i],
+    colsample_bytree = xgb_grid_sample$colsample_bytree[i],
+    gamma = xgb_grid_sample$gamma[i],
+    best_nrounds = best_iter,
+    cv_rmse = best_rmse,
+    valid_rmse = valid_rmse
+  ))
+  
+  # Update progress
+  setTxtProgressBar(pb, i)
+}
+close(pb)
+
+# Find best parameters
+best_xgb_idx <- which.min(xgb_tune_results$valid_rmse)
+best_xgb_params <- xgb_tune_results[best_xgb_idx, ]
+
+cat("\n\n--- Best XGBoost Hyperparameters ---\n")
+print(best_xgb_params)
+
+cat("\nTop 5 Parameter Configurations:\n")
+print(head(xgb_tune_results[order(xgb_tune_results$valid_rmse), ], 5))
+
+# Set best parameters
+xgb_params <- list(
+  objective = "reg:squarederror",
+  eta = best_xgb_params$eta,
+  max_depth = best_xgb_params$max_depth,
+  min_child_weight = best_xgb_params$min_child_weight,
+  subsample = best_xgb_params$subsample,
+  colsample_bytree = best_xgb_params$colsample_bytree,
+  gamma = best_xgb_params$gamma,
+  lambda = 1,
+  alpha = 0
+)
+
+best_nrounds <- best_xgb_params$best_nrounds
+
+cat(sprintf("\nOptimal number of rounds: %d\n", best_nrounds))
+cat(sprintf("Best Validation RMSE: %.4f\n", best_xgb_params$valid_rmse))
+
+# ------------------------------------------------------------
+# 2.3 Train Final XGBoost Model with Best Parameters
+# ------------------------------------------------------------
+
+cat("\n--- Training Final XGBoost Model with Best Parameters ---\n")
+
+# Train with best parameters and validation monitoring
+xgb_model <- xgb.train(
+  params = xgb_params,
+  data = dtrain,
+  nrounds = best_nrounds + 50,  # Add buffer
+  watchlist = list(train = dtrain, valid = dvalid),
+  early_stopping_rounds = 30,
+  verbose = 1,
+  print_every_n = 50
+)
+
+cat(sprintf("\nBest iteration: %d\n", xgb_model$best_iteration))
+
+
+cat("\n--- Making Predictions (XGBoost) ---\n")
+
+# Predictions
+pred_xgb_train <- predict(xgb_model, dtrain)
+pred_xgb_valid <- predict(xgb_model, dvalid)
+pred_xgb_test <- predict(xgb_model, dtest)
+
+# ------------------------------------------------------------
+# 2.6 Evaluate XGBoost
+# ------------------------------------------------------------
+
+cat("\n--- XGBoost Performance ---\n")
+
+# Training metrics
+xgb_train_rmse <- rmse(y_train, pred_xgb_train)
+xgb_train_mae <- mae(y_train, pred_xgb_train)
+xgb_train_r2 <- r2(y_train, pred_xgb_train)
+
+cat(sprintf("Training   -> RMSE: %.4f | MAE: %.4f | R²: %.4f\n", 
+            xgb_train_rmse, xgb_train_mae, xgb_train_r2))
+
+# Validation metrics
+xgb_valid_rmse <- rmse(y_valid, pred_xgb_valid)
+xgb_valid_mae <- mae(y_valid, pred_xgb_valid)
+xgb_valid_r2 <- r2(y_valid, pred_xgb_valid)
+
+cat(sprintf("Validation -> RMSE: %.4f | MAE: %.4f | R²: %.4f\n", 
+            xgb_valid_rmse, xgb_valid_mae, xgb_valid_r2))
+
+# Test metrics
+xgb_test_rmse <- rmse(y_test, pred_xgb_test)
+xgb_test_mae <- mae(y_test, pred_xgb_test)
+xgb_test_mape <- mape(y_test, pred_xgb_test)
+xgb_test_r2 <- r2(y_test, pred_xgb_test)
+xgb_test_adj_r2 <- adjusted_r2(y_test, pred_xgb_test, 
+                               length(y_test), ncol(X_test))
+
+cat(sprintf("Test       -> RMSE: %.4f | MAE: %.4f | MAPE: %.2f%% | R²: %.4f | Adj R²: %.4f\n", 
+            xgb_test_rmse, xgb_test_mae, xgb_test_mape, 
+            xgb_test_r2, xgb_test_adj_r2))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Evaluate
+# ==========================
+# Custom Regression Metrics
+# ==========================
+
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2))
+}
+
+mae <- function(actual, predicted) {
+  mean(abs(actual - predicted))
+}
+
+mape <- function(actual, predicted) {
+  mean(abs((actual - predicted) / actual)) * 100
+}
+
+mse <- function(actual, predicted) {
+  mean((actual - predicted)^2)
+}
+
+r2 <- function(actual, predicted) {
+  ss_res <- sum((actual - predicted)^2)
+  ss_tot <- sum((actual - mean(actual))^2)
+  1 - (ss_res / ss_tot)
+}
+
+adjusted_r2 <- function(actual, predicted, n, p) {
+  r2_val <- r2(actual, predicted)
+  1 - ((1 - r2_val) * (n - 1) / (n - p - 1))
+}
+
+
+# Number of samples
+n <- length(y_test)
+
+# Number of predictors (exclude BMI)
+p <- ncol(X_test)
+
+rmse_xgb <- rmse(y_test, pred_rf_test)
+mae_xgb  <- mae(y_test, pred_rf_test)
+mape_xgb <- mape(y_test, pred_rf_test)
+mse_xgb  <- mse(y_test, pred_rf_test)
+r2_xgb   <- r2(y_test, pred_rf_test)
+adjusted_r2_xgb <- adjusted_r2(y_test, pred_rf_test, n, p)
+
+cat("XGBoost - Test RMSE:", rmse_xgb, "\n")
+cat("XGBoost - Test MAE :", mae_xgb,  "\n")
+cat("XGBoost - Test MAPE:", mape_xgb, "\n")
+cat("XGBoost - Test MSE :", mse_xgb,  "\n")
+cat("XGBoost - Test R2 :", r2_xgb,  "\n")
+cat("XGBoost - Test Adjusted R2:", adjusted_r2_xgb, "\n")
+
 
 
