@@ -9,7 +9,7 @@ library(forcats)
 # 2. Load Dataset
 # ===============================
 # Change to your actual file path!
-df <- read.csv("C://Users//User//heartDisease//heart_disease_missing_simulated.csv")
+df <- read.csv("C://Users//User//heartDisease//heart_disease.csv")
 
  
 # 3. Basic Dataset Information
