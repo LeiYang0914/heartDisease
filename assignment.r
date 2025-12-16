@@ -11,7 +11,7 @@ library(forcats)
 # Change to your actual file path!
 df <- read.csv("C://Users//User//heartDisease//heart_disease.csv")
 
- 
+
 # 3. Basic Dataset Information
 # ===============================
 
@@ -1034,19 +1034,37 @@ xgb_bayes <- function(eta, max_depth, subsample,
     booster = "gbtree"
   )
   
-  xgb_model <- xgb.train(
-    params = params,
-    data = dtrain_xgb,
-    nrounds = 500,
-    watchlist = list(valid = dvalid_xgb),
-    early_stopping_rounds = 20,
-    verbose = 0
+  model <- tryCatch({
+    xgb.train(
+      params = params,
+      data = dtrain_xgb,
+      nrounds = 500,
+      watchlist = list(valid = dvalid_xgb),
+      early_stopping_rounds = 20,
+      verbose = 0
+    )
+  }, error = function(e) NULL)
+  
+  #  HARD FAIL SAFE
+  if (is.null(model)) {
+    return(list(Score = 0.5))
+  }
+  
+  best_auc <- suppressWarnings(
+    max(model$evaluation_log$valid_auc, na.rm = TRUE)
   )
   
-  best_auc <- max(xgb_model$evaluation_log$valid_auc)
+  # Prevent NA / Inf / constant collapse
+  if (!is.finite(best_auc)) {
+    best_auc <- 0.5
+  }
+  
+  # Add microscopic noise to prevent GP zero-variance
+  best_auc <- best_auc + runif(1, 0, 1e-6)
   
   return(list(Score = best_auc))
 }
+
 
 
 # ============================================================
@@ -1060,11 +1078,11 @@ opt_xgb <- bayesOpt(
   bounds = list(
     eta = c(0.01, 0.2),
     max_depth = c(3L, 10L),
-    subsample = c(0.6, 1.0),
-    colsample_bytree = c(0.6, 1.0),
-    min_child_weight = c(1, 20)
+    subsample = c(0.7, 1.0),
+    colsample_bytree = c(0.7, 1.0),
+    min_child_weight = c(1, 10)
   ),
-  initPoints = 8,
+  initPoints = 12,     
   iters.n = 20,
   acq = "ucb",
   kappa = 2.5,
@@ -1319,20 +1337,27 @@ for (i in 1:random_search_size) {
     verbose = FALSE
   )
   
-  best_iter <- cv$best_iteration
-  best_rmse <- min(cv$evaluation_log$test_rmse_mean)
+  best_iter <- ifelse(
+    is.null(cv$best_iteration),
+    nrow(cv$evaluation_log),
+    cv$best_iteration
+  )
   
-  # Store results
-  results <- rbind(results, data.frame(
-    eta = params$eta,
-    max_depth = params$max_depth,
-    min_child_weight = params$min_child_weight,
-    subsample = params$subsample,
-    colsample_bytree = params$colsample_bytree,
-    gamma = params$gamma,
-    best_iter = best_iter,
-    cv_rmse = best_rmse
-  ))
+  best_rmse <- min(cv$evaluation_log$test_rmse_mean, na.rm = TRUE)
+  
+  results <- rbind(
+    results,
+    data.frame(
+      eta = params$eta,
+      max_depth = params$max_depth,
+      min_child_weight = params$min_child_weight,
+      subsample = params$subsample,
+      colsample_bytree = params$colsample_bytree,
+      gamma = params$gamma,
+      best_iter = best_iter,
+      cv_rmse = best_rmse
+    )
+  )
   
   setTxtProgressBar(pb, i)
 }
@@ -1396,6 +1421,3 @@ cat(sprintf(
   "RMSE: %.4f | MAE: %.4f | MAPE: %.2f%% | R²: %.4f | Adj R²: %.4f\n",
   xgb_rmse, xgb_mae, xgb_mape, xgb_r2, xgb_adj_r2
 ))
-
-
-
