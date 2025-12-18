@@ -5,11 +5,25 @@
 #install.packages("forcats")
 library(tidyverse)
 library(forcats)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(corrplot)
+library(lightgbm)
+library(ParBayesianOptimization)
+library(Matrix)
+library(smotefamily)
+library(pROC)
+library(caret)
+library(xgboost)
+library(ranger)
+library(Metrics)
 # ===============================
 # 2. Load Dataset
 # ===============================
 # Change to your actual file path!
-df <- read.csv("C://Users//User//heartDisease//heart_disease.csv")
+df <- read.csv("C://Users//Wei Khang//heartDisease//heart_disease.csv")
 
 
 # 3. Basic Dataset Information
@@ -353,9 +367,6 @@ table(df_clean$LifestyleProfile)
 # =========================================================
 # EDA
 # =========================================================
-library(ggplot2)
-library(dplyr)
-library(scales)
 
 df_plot <- df_clean %>%
   mutate(
@@ -553,8 +564,6 @@ ggplot(df_healthcare, aes(x = factor(HealthcareScore), y = Percent)) +
 # 10. Full-feature correlation analysis (memory safe)
 # =========================================================
 
-library(corrplot)
-
 # 1) Build a numeric-only version of df_clean
 #    - Encode HeartDiseaseorAttack as numeric 0/1
 #    - Convert ALL remaining factors to numeric codes
@@ -593,9 +602,6 @@ corrplot(cor_mat,
          number.cex = 0.5,
          main  = "Correlation Heatmap of All Features")
 #=========================================================================================
-library(ggplot2)
-library(tidyr)
-library(dplyr)
 
 cor_long <- cor_mat %>%
   as.data.frame() %>%
@@ -818,14 +824,6 @@ cat("Test :", nrow(test_reg),  "rows,", ncol(test_reg),  "columns\n")
 # ============================================================
 #          LIGHTGBM + SMOTE + BAYESIAN OPTIMIZATION
 # ============================================================
-
-library(lightgbm)
-library(ParBayesianOptimization)
-library(Matrix)
-library(smotefamily)
-library(pROC)
-library(caret)
-library(xgboost)
 
 # ============================================================
 # 1.1 PREPARE DATA FOR MODELLING
@@ -1150,11 +1148,6 @@ cat(sprintf(
 # 15B. RANDOM FOREST REGRESSION (Optimized Ranger + BayesOpt)
 # ============================================================
 
-library(ranger)
-library(Metrics)
-library(ParBayesianOptimization)
-library(dplyr)
-
 cat("\n========================================\n")
 cat("   RANDOM FOREST REGRESSION MODEL\n")
 cat("========================================\n\n")
@@ -1265,9 +1258,6 @@ cat(sprintf(
 # ============================================================
 # XGBOOST REGRESSION (RANDOM SEARCH)
 # ============================================================
-
-library(xgboost)
-library(Metrics)
 
 cat("\n========================================\n")
 cat("        XGBOOST REGRESSION MODEL\n")

@@ -1,0 +1,1362 @@
+---
+title: "Heart Disease Analysis Report"
+author: "Chan Li Yang Gideon Looi Khoo Phei Ying Ng Jing Lee Ng Wei Khang"
+date: "2025-12-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+echo = TRUE,
+warning = FALSE,
+message = FALSE,
+fig.width = 9,
+fig.height = 4.8
+)
+```
+
+## 1. Introduction
+
+This report analyzes a heart disease health indicators dataset and builds two predictive tasks:
+
+- **Classification task:** Predict whether a respondent has had heart disease or attack (binary target).
+- **Regression task:** Predict BMI as a continuous target using demographic, lifestyle, and health factors.
+
+The workflow follows a standard data science pipeline: data loading, quality checks, preprocessing, feature engineering, exploratory analysis, correlation screening, train/validation/test split, normalization, modelling, and evaluation.
+
+## 2. Load Libraries
+
+This section loads the R libraries required for data manipulation, visualization, statistical analysis, and machine learning.
+```{r}
+library(tidyverse)
+library(forcats)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(corrplot)
+library(lightgbm)
+library(ParBayesianOptimization)
+library(Matrix)
+library(smotefamily)
+library(pROC)
+library(caret)
+library(xgboost)
+library(ranger)
+library(Metrics)
+```
+
+## 3. Load Dataset
+
+The dataset is imported from a CSV file and inspected to understand its structure, variable types, and overall distribution.
+
+```{r}
+df <- read.csv("C://Users//User//heartDisease//heart_disease.csv")
+
+head(df)
+dim(df)
+str(df)
+summary(df)
+```
+
+## 4. Data Quality Checks
+This section checks common data issues (missing values and duplicates) before cleaning.
+### 4.1 Missing Values
+Missing values are examined at both the column level and the dataset level to determine the extent of incomplete records.
+```{r}
+colSums(is.na(df))
+sum(is.na(df))
+```
+
+### 4.2 Duplicate Records
+Duplicate rows are identified, as they may bias descriptive statistics and model performance.
+```{r}
+sum(duplicated(df))
+```
+
+## 5. Data Preprocessing
+Data preprocessing is performed to ensure reliability and consistency of the dataset. This includes removing missing values, eliminating duplicate records, handling outliers, and validating variable ranges.
+
+```{r}
+df_clean <- df
+```
+
+### 5.1 Remove missing values
+```{r}
+df_clean <- df_clean %>% drop_na()
+```
+
+## 5.2 Remove duplicates
+```{r}
+df_clean <- df_clean %>% distinct()
+```
+
+### 5.3 Handle BMI outliers (Winsorization)
+
+BMI values are capped at the 1st and 99th percentiles to reduce the influence of extreme outliers.
+```{r}
+bmi_q <- quantile(df_clean$BMI, probs = c(0.01, 0.99), na.rm = TRUE)
+
+df_clean <- df_clean %>%
+mutate(BMI_capped = pmin(pmax(BMI, bmi_q[1]), bmi_q[2]))
+```
+
+### 5.4 Recode General Health Variable
+The original `GenHlth` variable is recorded as an ordinal scale from 1 to 5.  
+It is recoded into an ordered factor with meaningful labels to improve interpretability during analysis and visualization.
+
+```{r}
+df_clean <- df_clean %>%
+  mutate(
+    GenHlth_Factor = factor(GenHlth,
+                            levels = c(1,2,3,4,5),
+                            labels = c("Excellent","Very Good","Good","Fair","Poor"),
+                            ordered = TRUE
+    )
+  )
+```
+
+### 5.5 Validate Mental and Physical Health Day Ranges
+
+The `MentHlth` and `PhysHlth` variables represent the number of unhealthy days within the past 30 days.
+Observations exceeding this valid range are identified and removed to ensure data integrity.
+```{r}
+# -----------------------
+# Count invalid values
+# -----------------------
+invalid_ment <- sum(df_clean$MentHlth > 30, na.rm = TRUE)
+invalid_phys <- sum(df_clean$PhysHlth > 30, na.rm = TRUE)
+
+cat("Number of rows with MentHlth > 30:", invalid_ment, "\n")
+cat("Number of rows with PhysHlth > 30:", invalid_phys, "\n")
+
+# -----------------------
+# Total invalid rows
+# -----------------------
+invalid_total <- sum((df_clean$MentHlth > 30) | (df_clean$PhysHlth > 30), na.rm = TRUE)
+cat("Total rows to be removed due to invalid health day values:", invalid_total, "\n")
+
+# -----------------------
+# Remove invalid rows
+# -----------------------
+df_clean <- df_clean %>%
+  filter(MentHlth <= 30, PhysHlth <= 30)
+```
+
+## 6. Feature Engineering
+
+Feature engineering improves interpretability and may increase predictive performance by combining multiple related indicators into higher-level features.
+
+### 6.1 BMI Category
+
+BMI is grouped into standard clinical categories (Underweight, Normal, Overweight, Obese) to support categorical comparisons in EDA and modelling. 
+
+```{r}
+df_clean <- df_clean %>%
+  mutate(
+    # BMI categorical group
+    BMI_Category = cut(
+      BMI,
+      breaks = c(-Inf, 18.5, 25, 30, Inf),
+      labels = c("Underweight", "Normal", "Overweight", "Obese")
+    ),
+    BMI_Category = as.factor(BMI_Category)
+  )
+
+df_clean %>% 
+  select(BMI, BMI_Category) %>% 
+  head(10)
+
+table(df_clean$PhysHlth)
+```
+
+### 6.2 Age Group (CDC Mapping)
+
+The Age variable is coded from 1–13 and represents age ranges rather than exact ages. These codes are mapped to meaningful age groups and treated as ordered categories.
+
+```{r}
+df_clean <- df_clean %>%
+  mutate(
+    AgeGroup = factor(Age,
+                      levels = 1:13,
+                      labels = c(
+                        "18-24", "25-29", "30-34", "35-39", "40-44",
+                        "45-49", "50-54", "55-59", "60-64",
+                        "65-69", "70-74", "75-79", "80+"
+                      ),
+                      ordered = TRUE
+    )
+  )
+
+df_clean %>% 
+  select(Age, AgeGroup) %>% 
+  head(10)
+
+table(df_clean$AgeGroup)
+```
+
+### 6.3 Broader Age Bands
+
+Broader age bands are created to simplify interpretation and reduce sparsity when comparing heart disease rates across age. 
+
+```{r}
+df_clean <- df_clean %>%
+  mutate(
+    AgeBand = case_when(
+      Age <= 3  ~ "18-34",   # Young adults
+      Age <= 6  ~ "35-49",   # Middle age
+      Age <= 9  ~ "50-64",   # Older adults
+      Age <= 11 ~ "65-74",   # Elderly
+      TRUE      ~ "75+"      # Very elderly
+    ),
+    AgeBand = factor(AgeBand, ordered = TRUE)
+  )
+
+df_clean %>% 
+  select(Age, AgeBand) %>% 
+  head(10)
+
+table(df_clean$AgeBand)
+```
+
+### 6.4 Lifestyle Risk Score
+
+A composite Lifestyle Risk Score is constructed by combining multiple unhealthy lifestyle behaviours into a single index. Higher scores represent higher lifestyle risk.
+
+```{r}
+df_clean <- df_clean %>%
+  mutate(
+    RiskScore =
+      as.numeric(Smoker) +              # Smoking behavior
+      as.numeric(HvyAlcoholConsump) +   # Heavy drinking behavior
+      (1 - as.numeric(PhysActivity)) +  # Inactivity
+      (1 - as.numeric(Fruits)) +        # Low fruit intake
+      (1 - as.numeric(Veggies))         # Low vegetable intake
+  )
+
+df_clean %>%
+  select(Smoker, HvyAlcoholConsump, PhysActivity, Fruits, Veggies, RiskScore) %>%
+  head(10)
+
+summary(df_clean$RiskScore)
+```
+
+### 6.5 Disease Burden Index
+
+Disease burden is measured as the count of chronic conditions (high blood pressure, high cholesterol, diabetes, and stroke history).
+
+```{r}
+df_clean <- df_clean %>%
+  mutate(
+    DiseaseCount =
+      as.numeric(HighBP) +      # High blood pressure
+      as.numeric(HighChol) +    # High cholesterol
+      as.numeric(Diabetes) +    # Diabetes
+      as.numeric(Stroke)        # History of stroke
+  )
+
+# Inspect disease burden result
+df_clean %>%
+  select(HighBP, HighChol, Diabetes, Stroke, DiseaseCount) %>%
+  head(10)
+
+table(df_clean$DiseaseCount)
+```
+
+### 6.6 Health Stress Index (Mental + Physical Health)
+```{r}
+df_clean <- df_clean %>%
+  mutate(
+    HealthStressIndex = MentHlth + PhysHlth
+  )
+
+df_clean %>% 
+  select(MentHlth, PhysHlth, HealthStressIndex) %>% 
+  head(10)
+
+summary(df_clean$HealthStressIndex)
+```
+
+### 6.7 Healthcare Access Score
+
+Healthcare access is summarized using insurance coverage and affordability of doctor visits.
+
+```{r}
+df_clean <- df_clean %>%
+  mutate(
+    HealthcareScore =
+      as.numeric(AnyHealthcare) +       # Has insurance
+      (1 - as.numeric(NoDocbcCost))     # Could afford doctor visit
+  )
+
+df_clean %>% 
+  select(AnyHealthcare, NoDocbcCost, HealthcareScore) %>% 
+  head(10)
+
+table(df_clean$HealthcareScore)
+```
+
+### 6.8 Obesity Flag
+
+An obesity indicator is created using the BMI ≥ 30 threshold.
+```{r}
+df_clean <- df_clean %>%
+  mutate(
+    ObeseFlag = ifelse(BMI >= 30, 1, 0),
+    ObeseFlag = factor(ObeseFlag)
+  )
+
+df_clean %>% 
+  select(BMI, ObeseFlag) %>% 
+  head(10)
+
+table(df_clean$ObeseFlag)
+```
+
+### 6.9 Lifestyle Profile Category
+
+RiskScore is converted into an interpretable categorical lifestyle profile (Healthy, ModerateRisk, HighRisk).
+
+```{r}
+df_clean <- df_clean %>%
+  mutate(
+    LifestyleProfile = case_when(
+      RiskScore <= 1 ~ "Healthy",
+      RiskScore <= 3 ~ "ModerateRisk",
+      TRUE ~ "HighRisk"
+    ),
+    LifestyleProfile = factor(LifestyleProfile)
+  )
+
+df_clean %>% 
+  select(RiskScore, LifestyleProfile) %>% 
+  head(10)
+
+table(df_clean$LifestyleProfile)
+```
+
+## 7. Exploratory Data Analysis
+
+Exploratory analysis is conducted to examine the distribution of the target variable and its association with key engineered features (age, sex, BMI category, obesity status, lifestyle profile, and self-reported health).
+
+```{r}
+df_plot <- df_clean %>%
+  mutate(
+    HeartDisease = factor(HeartDiseaseorAttack,
+                          levels = c(0, 1),
+                          labels = c("No", "Yes")),
+    SexLabel = factor(Sex,
+                      levels = c(0, 1),
+                      labels = c("Female", "Male"))
+  )
+```
+
+### 7.1 Heart Disease Prevalence
+
+This plot summarizes the overall prevalence of heart disease/attack in the dataset.
+```{r}
+df_donut <- df_plot %>%
+  count(HeartDisease) %>%
+  mutate(prop = n / sum(n))
+
+ggplot(df_donut, aes(x = 2, y = prop, fill = HeartDisease)) +
+  geom_col(width = 1) +
+  coord_polar(theta = "y") +
+  xlim(0.5, 2.5) +
+  theme_void() +
+  labs(title = "Heart Disease Prevalence (Donut Chart)") +
+  geom_text(aes(label = percent(prop)), 
+            position = position_stack(vjust = 0.5))
+```
+
+#### Observation:
+The donut chart shows that approximately **10%** of individuals in the dataset have experienced heart disease or attack, while **90%** have not.
+
+#### Conclusion:
+Heart disease cases form a **minority class**, indicating a **class-imbalanced dataset**, which should be considered during model training and evaluation.
+
+### 7.2 Heart Disease Rate by Age Band
+
+Heart disease proportion is compared across age bands to assess how prevalence changes with age.
+
+```{r}
+ggplot(df_plot, aes(x = AgeBand, fill = HeartDisease)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Heart Disease Rate by Age Band",
+       x = "Age Band",
+       y = "Proportion") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+#### Observation:
+The proportion of heart disease **increases steadily with age**, with the lowest prevalence in the 18–34 group and the highest in the **75+** group.
+
+#### Conclusion:
+Age is a **strong risk factor** for heart disease, and older age bands are significantly more vulnerable, highlighting the importance of age in predictive modelling.
+
+### 7.3 Heart Disease Rate by Sex
+
+This plot compares heart disease prevalence between male and female respondents.
+
+```{r}
+ggplot(df_plot, aes(x = SexLabel, fill = HeartDisease)) +                       # ok
+  geom_bar(position = "fill", color = "white") +
+  scale_fill_manual(values = c("#F76C6C", "#1ECBE1")) +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Heart Disease Rate by Sex",
+       x = "Sex",
+       y = "Proportion") +
+  theme_minimal(base_size = 14)
+```
+
+#### Observation:
+Males exhibit a **higher proportion** of heart disease cases compared to females.
+
+#### Conclusion:
+Sex appears to be an **important demographic factor**, with males showing greater susceptibility to heart disease in this dataset.
+
+### 7.4 Heart Disease Rate by BMI Category
+
+Heart disease prevalence is compared across BMI categories.
+
+```{r}
+ggplot(df_plot, aes(BMI_Category, fill = HeartDisease)) +
+  geom_bar(position = "fill", color = "white") +
+  scale_fill_manual(values = c("#F9A825", "#1976D2")) +
+  labs(title = "Heart Disease Rate by BMI Category",
+       x = "BMI Category",
+       y = "Proportion") +
+  scale_y_continuous(labels = percent) +
+  theme_minimal(base_size = 14)
+```
+
+#### Observation:
+Heart disease prevalence is **lowest in the Normal BMI group** and higher among **Overweight and Obese** individuals, with Obese showing the highest proportion.
+
+#### Conclusion:
+Higher BMI is associated with an **increased risk of heart disease**, indicating BMI as an important predictive health indicator.
+
+### 7.5 Heart Disease Rate by Obesity Status
+
+This plot compares heart disease prevalence between obese and non-obese individuals.
+
+```{r}
+ggplot(df_plot, aes(factor(ObeseFlag), fill = HeartDisease)) +                  # ok
+  geom_bar(position = "fill", width = 0.5) +
+  scale_fill_manual(values = c("#81D4FA", "#EF5350")) +
+  labs(title = "Heart Disease Rate by Obesity Status",
+       x = "Obesity (0 = No, 1 = Yes)",
+       y = "Proportion") +
+  scale_y_continuous(labels = percent) +
+  theme_minimal(base_size = 14)
+```
+
+#### Observation:
+Obese individuals (Obesity = 1) exhibit a **higher proportion of heart disease** compared to non-obese individuals.
+
+#### Conclusion:
+Obesity status is **positively associated** with heart disease prevalence, reinforcing its role as a key risk factor.
+
+### 7.6 Heart Disease Rate by Lifestyle Profile
+
+This plot evaluates heart disease prevalence across lifestyle risk profiles.
+
+```{r}
+ggplot(df_plot, aes(LifestyleProfile, fill = HeartDisease)) +
+  geom_bar(position = "fill", color = "white") +
+  scale_fill_manual(values = c("#43A047", "#EF5350")) +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Heart Disease Rate by Lifestyle Profile",
+       x = "Lifestyle Category",
+       y = "Proportion") +
+  theme_minimal(base_size = 14)
+```
+
+#### Observation:
+The *High-Risk lifestyle group** shows the highest heart disease prevalence, followed by the Moderate-Risk group, while the Healthy group has the lowest.
+
+#### Conclusion:
+Unhealthy lifestyle behaviours significantly **increase heart disease risk**, highlighting the impact of combined lifestyle factors.
+
+### 7.7 Heart Disease Rate by Self-Reported General Health
+
+Self-reported general health is compared against heart disease prevalence.
+
+```{r}
+ggplot(df_plot, aes(x = GenHlth_Factor, fill = HeartDisease)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Heart Disease Rate by Self-Reported General Health",
+       x = "General Health",
+       y = "Proportion") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+#### Observation:
+Heart disease prevalence **increases sharply** as self-reported general health declines from Excellent to Poor.
+
+#### Conclusion:
+Self-reported general health is a **strong indicator** of heart disease risk and reflects overall physical well-being.
+
+### 7.8 Health Stress Index by Heart Disease Status
+
+This boxplot compares the distribution of combined physical and mental unhealthy days between individuals with and without heart disease.
+
+```{r}
+ggplot(df_plot, aes(x = HeartDisease, y = HealthStressIndex, fill = HeartDisease)) +
+  geom_boxplot() +
+  labs(title = "Health Stress Index by Heart Disease Status",
+       x = "Heart Disease or Attack",
+       y = "HealthStressIndex")
+```
+
+#### Observation:
+Individuals with heart disease have a **higher median Health Stress Index** and greater variability compared to those without heart disease.
+
+#### Conclusion:
+Poor physical and mental health (higher stress burden) is **strongly associated** with heart disease presence.
+
+## 8. Correlation Analysis
+
+Correlation analysis is conducted to examine linear relationships among features and to support feature selection for both classification and regression tasks. Since correlation requires numeric inputs, categorical variables are converted into numeric codes. This analysis is exploratory and does not imply causation.
+
+### 8.1 Preparation of Numeric Feature Matrix
+
+All factor variables are converted to numeric codes, and the binary target variable is encoded as 0/1 for correlation computation.
+
+```{r}
+df_corr <- df_clean %>%
+  mutate(
+    HeartDisease_num = as.numeric(as.character(HeartDiseaseorAttack))
+  ) %>%
+  select(-HeartDiseaseorAttack) %>%       
+  mutate(
+    across(where(is.factor), ~ as.numeric(.))   
+  )
+
+cat("Number of features used for correlation:", ncol(df_corr), "\n")
+```
+
+### 8.2 Correlation Matrix Computation
+
+The correlation matrix is computed using pairwise complete observations to handle any remaining missing values safely.
+
+```{r}
+cor_mat <- cor(df_corr, use = "pairwise.complete.obs")
+
+dim(cor_mat)
+```
+
+### 8.3 Correlation Heatmap
+
+The heatmap below visualizes the upper triangle of the correlation matrix to reduce redundancy and improve readability.
+
+```{r}
+cor_long <- cor_mat %>%
+  as.data.frame() %>%
+  mutate(Var1 = rownames(.)) %>%
+  pivot_longer(-Var1, names_to = "Var2", values_to = "value")
+
+ggplot(cor_long, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white", size = 0.2) +
+  scale_fill_gradient2(
+    low = "#6BAED6", mid = "white", high = "#DE2D26",
+    midpoint = 0, limit = c(-1, 1), name = "Correlation"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 60, vjust = 1, hjust = 1),
+    panel.grid = element_blank()
+  ) +
+  labs(
+    title = "Correlation Heatmap (ggplot2)",
+    x = "",
+    y = ""
+  )
+```
+
+### 8.4 Feature Correlation with BMI (Regression Target)
+
+This section examines correlations between BMI and other features to support regression feature selection.
+
+```{r}
+if ("BMI" %in% rownames(cor_mat)) {
+  bmi_cor <- sort(cor_mat["BMI", ], decreasing = TRUE)
+  cat("\nCorrelation with BMI:\n")
+  print(round(bmi_cor, 3))
+} else {
+  warning("BMI not found in correlation matrix row names.")
+}
+```
+
+### 8.5 Feature Correlation with Heart Disease (Classification Target)
+
+This section examines correlations between the binary heart disease outcome and other features.
+
+```{r}
+if ("HeartDisease_num" %in% rownames(cor_mat)) {
+  hd_cor <- sort(cor_mat["HeartDisease_num", ], decreasing = TRUE)
+  cat("\nCorrelation with HeartDiseaseorAttack (0/1):\n")
+  print(round(hd_cor, 3))
+} else {
+  warning("HeartDisease_num not found in correlation matrix row names.")
+}
+```
+
+## 9. Dataset Construction and Partitioning
+
+This section prepares two modelling datasets: (1) a classification dataset for predicting heart disease occurrence and (2) a regression dataset for predicting BMI. Features are selected based on exploratory correlation screening and domain knowledge.
+
+### 9.1 Feature Selection for Classification and Regression
+
+For classification, a set of demographic, health condition, and engineered lifestyle features is selected. For regression, BMI is treated as the target variable and additional socioeconomic factors (income and education) are included.
+
+```{r}
+# -----------------------------
+# Classification features
+# -----------------------------
+# NOTE: MentHlth and PhysHlth are included once only (avoid duplicates).
+clf_features <- c(
+  "HeartDiseaseorAttack",  # target
+  "Age", "AgeGroup", "AgeBand",
+  "Sex",
+  "HighBP", "HighChol", "Diabetes", "Stroke",
+  "Smoker", "PhysActivity",
+  "MentHlth", "PhysHlth", "HealthStressIndex",
+  "DiseaseCount", "ObeseFlag",
+  "RiskScore", "LifestyleProfile",
+  "BMI"
+)
+
+df_clf_raw <- df_clean %>% select(all_of(clf_features))
+
+# -----------------------------
+# Regression features
+# -----------------------------
+reg_features <- c(
+  "BMI",                   # target
+  "Age", "AgeGroup", "AgeBand",
+  "Sex",
+  "HighBP", "HighChol", "Diabetes", "Stroke",
+  "Smoker", "PhysActivity",
+  "MentHlth", "PhysHlth", "HealthStressIndex",
+  "DiseaseCount", "RiskScore", "LifestyleProfile",
+  "Income", "Education"
+)
+
+df_reg_raw <- df_clean %>% select(all_of(reg_features))
+```
+
+### 9.2 Train/Validation/Test Split
+
+A 60/20/20 split is applied to support model tuning (validation set) and unbiased evaluation (test set). A fixed random seed is used for reproducibility.
+
+```{r}
+set.seed(123)
+
+n <- nrow(df_clean)
+indices <- sample(seq_len(n))
+
+train_size <- floor(0.6 * n)
+valid_size <- floor(0.2 * n)
+
+train_idx <- indices[1:train_size]
+valid_idx <- indices[(train_size + 1):(train_size + valid_size)]
+test_idx  <- indices[(train_size + valid_size + 1):n]
+
+cat("\nTrain:", length(train_idx),
+    "\nValid:", length(valid_idx),
+    "\nTest:",  length(test_idx), "\n")
+```
+
+### 9.3 Build Classification and Regression Datasets
+
+The classification target is converted into a factor ("No"/"Yes") for modelling workflows such as SMOTE, while regression retains BMI as a numeric outcome.
+
+```{r}
+# ---------------------
+# Classification split
+# ---------------------
+train_clf <- df_clf_raw[train_idx, ]
+valid_clf <- df_clf_raw[valid_idx, ]
+test_clf  <- df_clf_raw[test_idx, ]
+
+train_clf$HeartDisease <- factor(train_clf$HeartDiseaseorAttack, levels=c(0,1), labels=c("No","Yes"))
+valid_clf$HeartDisease <- factor(valid_clf$HeartDiseaseorAttack, levels=c(0,1), labels=c("No","Yes"))
+test_clf$HeartDisease  <- factor(test_clf$HeartDiseaseorAttack, levels=c(0,1), labels=c("No","Yes"))
+
+train_clf <- train_clf %>% select(-HeartDiseaseorAttack) %>% relocate(HeartDisease)
+valid_clf <- valid_clf %>% select(-HeartDiseaseorAttack) %>% relocate(HeartDisease)
+test_clf  <- test_clf  %>% select(-HeartDiseaseorAttack) %>% relocate(HeartDisease)
+
+# ------------------
+# Regression split
+# ------------------
+train_reg <- df_reg_raw[train_idx, ]
+valid_reg <- df_reg_raw[valid_idx, ]
+test_reg  <- df_reg_raw[test_idx, ]
+```
+
+## 10. Normalization (Train-only Fitting)
+
+Selected numeric variables are standardised using mean and standard deviation estimated from the training set only. The learned scaling parameters are then applied to validation and test sets to prevent data leakage.
+
+```{r}
+# --------------------
+# Variables to Scale
+# --------------------
+scale_cols <- c("BMI", "MentHlth", "PhysHlth")
+
+# Fit scaler on TRAIN ONLY (classification train still contains these columns before dropping)
+scaler_means <- sapply(train_clf[, scale_cols], mean)
+scaler_sds   <- sapply(train_clf[, scale_cols], sd)
+
+scale_apply <- function(df, cols, means, sds) {
+  df[, paste0(cols, "_scaled")] <- sweep(df[, cols], 2, means, FUN = "-") / sds
+  return(df)
+}
+
+# -----------------
+# Apply Scaling
+# -----------------
+train_clf <- scale_apply(train_clf, scale_cols, scaler_means, scaler_sds)
+valid_clf <- scale_apply(valid_clf, scale_cols, scaler_means, scaler_sds)
+test_clf  <- scale_apply(test_clf,  scale_cols, scaler_means, scaler_sds)
+
+train_reg <- scale_apply(train_reg, scale_cols, scaler_means, scaler_sds)
+valid_reg <- scale_apply(valid_reg, scale_cols, scaler_means, scaler_sds)
+test_reg  <- scale_apply(test_reg,  scale_cols, scaler_means, scaler_sds)
+```
+
+### 10.1 Drop Unscaled Versions Where Appropriate
+
+For classification, unscaled BMI/MentHlth/PhysHlth are removed after scaling. For regression, BMI is retained as the target; the scaled BMI column is removed.
+
+```{r}
+# -----------------------------------------
+# Classification: drop unscaled originals
+# -----------------------------------------
+train_clf <- train_clf %>% select(-BMI, -MentHlth, -PhysHlth)
+valid_clf <- valid_clf %>% select(-BMI, -MentHlth, -PhysHlth)
+test_clf  <- test_clf  %>% select(-BMI, -MentHlth, -PhysHlth)
+
+# ----------------------------------------------------------------------
+# Regression: keep BMI target, drop BMI_scaled and unscaled Ment/Phys
+# ----------------------------------------------------------------------
+train_reg <- train_reg %>% select(-BMI_scaled,-MentHlth, -PhysHlth)
+valid_reg <- valid_reg %>% select(-BMI_scaled,-MentHlth, -PhysHlth)
+test_reg  <- test_reg  %>% select(-BMI_scaled,-MentHlth, -PhysHlth)
+
+cat("\n==== FINAL DATASET SHAPES ==== \n")
+
+cat("\n[Classification]\n")
+cat("Train:", nrow(train_clf), "rows,", ncol(train_clf), "columns\n")
+cat("Valid:", nrow(valid_clf), "rows,", ncol(valid_clf), "columns\n")
+cat("Test :", nrow(test_clf),  "rows,", ncol(test_clf),  "columns\n")
+
+cat("\n[Regression]\n")
+cat("Train:", nrow(train_reg), "rows,", ncol(train_reg), "columns\n")
+cat("Valid:", nrow(valid_reg), "rows,", ncol(valid_reg), "columns\n")
+cat("Test :", nrow(test_reg),  "rows,", ncol(test_reg),  "columns\n")
+```
+
+## 11. Modelling
+
+This section develops models for both tasks. For classification, two ensemble approaches are compared: LightGBM trained on SMOTE-balanced data and XGBoost trained on original data with class weighting. For regression, a Random Forest (Ranger) model and an XGBoost regression model are trained and evaluated using standard regression metrics.
+
+### 11A. Classification Modelling
+#### 11A.1 Modelling Strategy
+
+The classification pipeline uses two imbalance-handling strategies:
+- **SMOTE** is applied to the training data for LightGBM to reduce class imbalance.
+- **Class weighting (scale_pos_weight)** is used for XGBoost without SMOTE to preserve the original data distribution.
+
+#### 11A.2 Data Preparation for Modelling
+
+The response variable is converted into numeric form (0/1) for model training.
+All predictors are one-hot encoded using`model.matrix()`.
+```{r}
+train_y_num <- ifelse(train_clf$HeartDisease == "Yes", 1, 0)
+valid_y_num <- ifelse(valid_clf$HeartDisease == "Yes", 1, 0)
+test_y_num  <- ifelse(test_clf$HeartDisease  == "Yes", 1, 0)
+
+X_train <- model.matrix(HeartDisease ~ ., train_clf)[, -1]
+X_valid <- model.matrix(HeartDisease ~ ., valid_clf)[, -1]
+X_test  <- model.matrix(HeartDisease ~ ., test_clf)[, -1]
+```
+
+#### 11A.3 LightGBM with SMOTE + Bayesian Optimization
+SMOTE is applied to the training data only. Bayesian Optimization is used to tune key LightGBM hyperparameters using validation AUC.
+
+##### 11A.3.1 Apply SMOTE (Training Set Only)
+SMOTE is applied only to the training data to reduce class imbalance without leaking information into validation or test sets.
+
+```{r}
+cat("\n--- Running SMOTE on training data ---\n")
+
+df_smote_X <- as.data.frame(X_train)
+df_smote_y <- factor(train_y_num, levels = c(0, 1))
+
+smote_out <- SMOTE(
+  df_smote_X,
+  df_smote_y,
+  K = 5,
+  dup_size = 3
+)
+
+X_train_smote <- as.matrix(smote_out$data[, -ncol(smote_out$data)])
+y_train_smote <- as.numeric(as.character(smote_out$data$class))
+
+cat("\nOriginal distribution:\n")
+print(table(train_y_num))
+cat("\nAfter SMOTE:\n")
+print(table(y_train_smote))
+```
+
+##### 11A.3.2 Create LightGBM Datasets
+
+LightGBM datasets are created for training and validation in preparation for hyperparameter tuning.
+
+```{r}
+dtrain <- lgb.Dataset(
+  data = X_train_smote,
+  label = y_train_smote
+)
+
+dvalid <- lgb.Dataset.create.valid(
+  dtrain,
+  data = as.matrix(X_valid),
+  label = valid_y_num
+)
+```
+
+##### 11A.3.3 Bayesian Optimization for LightGBM (AUC)
+
+Bayesian Optimization is used to tune key LightGBM hyperparameters.
+The objective is to maximize validation AUC with early stopping.
+
+```{r}
+lgb_bayes <- function(learning_rate, num_leaves, feature_fraction,
+                      bagging_fraction, min_data_in_leaf) {
+  
+  params <- list(
+    objective = "binary",
+    metric = "auc",
+    learning_rate = learning_rate,
+    num_leaves = as.integer(num_leaves),
+    feature_fraction = feature_fraction,
+    bagging_fraction = bagging_fraction,
+    bagging_freq = 5,
+    min_data_in_leaf = as.integer(min_data_in_leaf),
+    
+    # IMPORTANT FIX
+    feature_pre_filter = FALSE,
+    force_row_wise = TRUE,    
+    verbosity = -1
+  )
+  
+  model <- lgb.train(
+    params = params,
+    data = dtrain,
+    valids = list(valid = dvalid),
+    nrounds = 500,
+    early_stopping_rounds = 30,
+    verbose = -1
+  )
+  
+  best_auc <- max(unlist(model$record_evals$valid$auc$eval))
+  return(list(Score = best_auc))
+}
+
+set.seed(123)
+
+opt_results <- bayesOpt(
+  FUN = lgb_bayes,
+  bounds = list(
+    learning_rate = c(0.01, 0.2),
+    num_leaves = c(20L, 80L),
+    feature_fraction = c(0.6, 1.0),
+    bagging_fraction = c(0.6, 1.0),
+    min_data_in_leaf = c(10L, 80L)
+  ),
+  initPoints = 8,   
+  iters.n = 20,
+  acq = "ucb",
+  kappa = 2.5,
+  parallel = FALSE,
+  verbose = TRUE
+)
+
+cat("\n========== BEST BAYESIAN OPT PARAMETERS ==========\n")
+print(getBestPars(opt_results))
+best_params <- getBestPars(opt_results)
+```
+
+##### 11A.3.4 Train Final LightGBM and Evaluate on Test Set
+
+The final model is trained using optimized hyperparameters and evaluated on the test set using Accuracy, Precision, Recall, F1-score, and AUC.
+
+```{r}
+final_params <- list(
+  objective = "binary",
+  metric = "auc",
+  learning_rate = best_params$learning_rate,
+  num_leaves = as.integer(best_params$num_leaves),
+  feature_fraction = best_params$feature_fraction,
+  bagging_fraction = best_params$bagging_fraction,
+  bagging_freq = 5,
+  min_data_in_leaf = as.integer(best_params$min_data_in_leaf),
+  feature_pre_filter = FALSE,
+  force_row_wise = TRUE,
+  verbosity = -1
+)
+
+final_model <- lgb.train(
+  params = final_params,
+  data = dtrain,
+  valids = list(valid = dvalid),
+  nrounds = 700,
+  early_stopping_rounds = 40,
+  verbose = 1
+)
+
+pred_prob <- predict(final_model, as.matrix(X_test))
+pred <- ifelse(pred_prob > 0.5, 1, 0)
+
+pred_factor <- factor(pred, levels = c(0, 1))
+test_factor <- factor(test_y_num, levels = c(0, 1))
+
+conf <- table(Predicted = pred_factor, Actual = test_factor)
+
+acc <- mean(pred == test_y_num)
+prec <- caret::precision(pred_factor, test_factor)
+rec <- caret::recall(pred_factor, test_factor)
+f1 <- caret::F_meas(pred_factor, test_factor)
+auc <- auc(test_y_num, pred_prob)
+
+cat("\n================ FINAL LIGHTGBM PERFORMANCE ================\n")
+print(conf)
+cat(sprintf(
+  "\nAccuracy: %.4f\nPrecision: %.4f\nRecall: %.4f\nF1 Score: %.4f\nAUC: %.4f\n",
+  acc, prec, rec, f1, auc
+))
+```
+
+#### 11A.4 XGBoost with Class Weighting + Bayesian Optimization
+XGBoost is tuned using Bayesian Optimization, using class weighting to address imbalance without resampling.
+
+##### 11A.4.1 Prepare DMatrix and Class Weight
+
+XGBoost is trained using the original (unbalanced) training data.
+Class imbalance is handled using `scale_pos_weight`.
+```{r}
+dtrain_xgb <- xgb.DMatrix(data = X_train, label = train_y_num)
+dvalid_xgb <- xgb.DMatrix(data = X_valid, label = valid_y_num)
+dtest_xgb  <- xgb.DMatrix(data = X_test,  label = test_y_num)
+
+scale_pos_weight_val <- sum(train_y_num == 0) / sum(train_y_num == 1)
+scale_pos_weight_val
+```
+
+##### 11A.4.2 Bayesian Optimization for XGBoost (AUC)
+
+Bayesian Optimization is used to tune XGBoost hyperparameters by maximizing validation AUC.
+
+```{r}
+xgb_bayes <- function(eta, max_depth, subsample,
+                      colsample_bytree, min_child_weight) {
+  
+  params <- list(
+    objective = "binary:logistic",
+    eval_metric = "auc",
+    eta = eta,
+    max_depth = as.integer(max_depth),
+    subsample = subsample,
+    colsample_bytree = colsample_bytree,
+    min_child_weight = min_child_weight,
+    scale_pos_weight = scale_pos_weight_val,
+    tree_method = "hist",
+    booster = "gbtree"
+  )
+  
+  model <- tryCatch({
+    xgb.train(
+      params = params,
+      data = dtrain_xgb,
+      nrounds = 500,
+      watchlist = list(valid = dvalid_xgb),
+      early_stopping_rounds = 20,
+      verbose = 0
+    )
+  }, error = function(e) NULL)
+  
+  #  HARD FAIL SAFE
+  if (is.null(model)) {
+    return(list(Score = 0.5))
+  }
+  
+  best_auc <- suppressWarnings(
+    max(model$evaluation_log$valid_auc, na.rm = TRUE)
+  )
+  
+  # Prevent NA / Inf / constant collapse
+  if (!is.finite(best_auc)) {
+    best_auc <- 0.5
+  }
+  
+  # Add microscopic noise to prevent GP zero-variance
+  best_auc <- best_auc + runif(1, 0, 1e-6)
+  
+  return(list(Score = best_auc))
+}
+
+set.seed(123)
+
+opt_xgb <- bayesOpt(
+  FUN = xgb_bayes,
+  bounds = list(
+    eta = c(0.01, 0.2),
+    max_depth = c(3L, 10L),
+    subsample = c(0.7, 1.0),
+    colsample_bytree = c(0.7, 1.0),
+    min_child_weight = c(1, 10)
+  ),
+  initPoints = 12,     
+  iters.n = 20,
+  acq = "ucb",
+  kappa = 2.5,
+  verbose = TRUE
+)
+
+best_xgb_params <- getBestPars(opt_xgb)
+cat("\nBest XGB Params:\n")
+print(best_xgb_params)
+```
+
+##### 11A.4.3 Train Final XGBoost and Evaluate on Test Set
+
+The final tuned XGBoost model is trained and evaluated using the same classification metrics.
+
+```{r}
+final_xgb_params <- list(
+  objective = "binary:logistic",
+  eval_metric = "auc",
+  eta = best_xgb_params$eta,
+  max_depth = as.integer(best_xgb_params$max_depth),
+  subsample = best_xgb_params$subsample,
+  colsample_bytree = best_xgb_params$colsample_bytree,
+  min_child_weight = best_xgb_params$min_child_weight,
+  scale_pos_weight = scale_pos_weight_val,
+  tree_method = "hist",
+  booster = "gbtree"
+)
+
+xgb_clf <- xgb.train(
+  params = final_xgb_params,
+  data = dtrain_xgb,
+  nrounds = 700,
+  watchlist = list(valid = dvalid_xgb),
+  early_stopping_rounds = 30,
+  verbose = 1
+)
+
+pred_prob_xgb <- predict(xgb_clf, dtest_xgb)
+pred_xgb <- ifelse(pred_prob_xgb > 0.5, 1, 0)
+
+pred_xgb_factor <- factor(pred_xgb, levels = c(0,1))
+test_factor_xgb <- factor(test_y_num, levels = c(0,1))
+
+xgb_conf <- table(Predicted = pred_xgb_factor, Actual = test_factor_xgb)
+
+xgb_acc  <- mean(pred_xgb == test_y_num)
+xgb_prec <- caret::precision(pred_xgb_factor, test_factor_xgb)
+xgb_rec  <- caret::recall(pred_xgb_factor, test_factor_xgb)
+xgb_f1   <- caret::F_meas(pred_xgb_factor, test_factor_xgb)
+xgb_auc  <- auc(test_y_num, pred_prob_xgb)
+
+cat("\nXGBoost Confusion Matrix:\n")
+print(xgb_conf)
+
+cat(sprintf(
+  "\nXGBoost Accuracy: %.4f | Precision: %.4f | Recall: %.4f | F1: %.4f | AUC: %.4f\n",
+  xgb_acc, xgb_prec, xgb_rec, xgb_f1, xgb_auc
+))
+```
+
+### 11B. Regression Modelling
+This section develops regression models to predict **BMI** as a continuous outcome. Two ensemble approaches are evaluated:
+1. **Random Forest Regression (Ranger)** tuned using Bayesian Optimization.
+2. **XGBoost Regression** tuned using Random Search with cross-validation.
+
+Both models are evaluated on the test set using RMSE, MAE, MAPE, R², and Adjusted R².
+
+#### Classification Summary
+
+
+#### 11B.1 Random Forest Regression (Ranger) with Bayesian Optimization
+##### 11B.1.1 Evaluation Metric Definition
+
+Adjusted R² is included to account for the number of predictors used in the model.
+
+```{r}
+adj_r2 <- function(y_true, y_pred, p) {
+  r2_val <- Metrics::r2(y_true, y_pred)
+  n <- length(y_true)
+  return(1 - (1 - r2_val) * ((n - 1) / (n - p - 1)))
+}
+
+p <- ncol(train_reg) - 1 
+```
+
+##### 11B.1.2 Bayesian Optimization for Ranger (Validation RMSE)
+
+Bayesian Optimization is used to tune `mtry`, `min.node.size`, and `sample.fraction`.
+The optimization objective is to minimize validation RMSE.
+```{r}
+rf_bayes <- function(mtry, min_node_size, sample_fraction) {
+  
+  model <- ranger(
+    BMI ~ .,
+    data = train_reg,
+    num.trees = 500,
+    mtry = as.integer(mtry),
+    min.node.size = as.integer(min_node_size),
+    sample.fraction = sample_fraction,
+    importance = "impurity"
+  )
+  
+  pred_valid <- predict(model, data = valid_reg)$predictions
+  rmse_valid <- Metrics::rmse(valid_reg$BMI, pred_valid)
+  
+  return(list(Score = -rmse_valid))  
+}
+
+cat("Running Bayesian Optimization for Ranger...\n\n")
+
+opt_results_rf <- bayesOpt(
+  FUN = rf_bayes,
+  bounds = list(
+    mtry = c(2L, 15L),
+    min_node_size = c(2L, 20L),
+    sample_fraction = c(0.5, 1.0)
+  ),
+  initPoints = 8,
+  iters.n = 20,
+  acq = "ucb",
+  kappa = 2.5,
+  verbose = TRUE
+)
+
+best_params_rf <- getBestPars(opt_results_rf)
+cat("\nBest Ranger Parameters:\n")
+print(best_params_rf)
+```
+
+##### 11B.1.3 Train Final Ranger Model and Evaluate on Test Set
+
+The final tuned Random Forest regression model is trained and evaluated using standard regression metrics.
+
+```{r}
+rf_model_final <- ranger(
+  BMI ~ .,
+  data = train_reg,
+  num.trees = 700,
+  mtry = as.integer(best_params_rf$mtry),
+  min.node.size = as.integer(best_params_rf$min_node_size),
+  sample.fraction = best_params_rf$sample_fraction,
+  importance = "impurity"
+)
+
+# =================
+#  Predictions
+# =================
+
+pred_rf_train <- predict(rf_model_final, data = train_reg)$predictions
+pred_rf_valid <- predict(rf_model_final, data = valid_reg)$predictions
+pred_rf_test  <- predict(rf_model_final, data = test_reg)$predictions
+
+# =================================
+#  Final Evaluation (Test Set) 
+# =================================
+
+rf_rmse <- rmse(test_reg$BMI, pred_rf_test)
+rf_mae  <- mae(test_reg$BMI, pred_rf_test)
+rf_mape <- mape(test_reg$BMI, pred_rf_test)
+
+# caret R2 (predictions first!)
+rf_r2 <- caret::R2(pred_rf_test, test_reg$BMI)
+
+# Adjusted R²
+p <- ncol(test_reg) - 1
+n <- nrow(test_reg)
+rf_adj_r2 <- 1 - (1 - rf_r2) * ((n - 1) / (n - p - 1))
+
+cat("\n========= RANDOM FOREST (Ranger) FINAL PERFORMANCE =========\n")
+cat(sprintf(
+  "Test RMSE: %.4f | MAE: %.4f | MAPE: %.2f%% | R²: %.4f | Adj R²: %.4f\n",
+  rf_rmse, rf_mae, rf_mape, rf_r2, rf_adj_r2
+))
+```
+
+#### 11B.2 XGBoost Regression with Random Search
+##### 11B.2.1 Convert Regression Data into Model Matrices
+
+Predictors are one-hot encoded using model.matrix() to ensure XGBoost receives numeric inputs.
+
+```{r}
+X_train <- model.matrix(BMI ~ ., data = train_reg)[, -1]
+y_train <- train_reg$BMI
+
+X_valid <- model.matrix(BMI ~ ., data = valid_reg)[, -1]
+y_valid <- valid_reg$BMI
+
+X_test  <- model.matrix(BMI ~ ., data = test_reg)[, -1]
+y_test  <- test_reg$BMI
+
+dtrain <- xgb.DMatrix(X_train, label = y_train)
+dvalid <- xgb.DMatrix(X_valid, label = y_valid)
+dtest  <- xgb.DMatrix(X_test,  label = y_test)
+```
+
+##### 11B.2.2 Random Search using Cross-Validation (CV RMSE)
+
+A random search is conducted over multiple hyperparameter combinations.
+Three-fold cross-validation is used to select the configuration with the lowest CV RMSE.
+
+```{r}
+set.seed(123)
+
+# Define random search space
+random_search_size <- 30
+
+param_space <- data.frame(
+  eta = runif(random_search_size, 0.01, 0.2),
+  max_depth = sample(3:10, random_search_size, replace = TRUE),
+  min_child_weight = sample(1:15, random_search_size, replace = TRUE),
+  subsample = runif(random_search_size, 0.6, 1.0),
+  colsample_bytree = runif(random_search_size, 0.6, 1.0),
+  gamma = runif(random_search_size, 0, 0.3)
+)
+
+results <- data.frame()
+
+pb <- txtProgressBar(min = 0, max = random_search_size, style = 3)
+
+for (i in 1:random_search_size) {
+  
+  params <- list(
+    objective = "reg:squarederror",
+    eta = param_space$eta[i],
+    max_depth = param_space$max_depth[i],
+    min_child_weight = param_space$min_child_weight[i],
+    subsample = param_space$subsample[i],
+    colsample_bytree = param_space$colsample_bytree[i],
+    gamma = param_space$gamma[i]
+  )
+  
+  # Run CV for current parameter set
+  cv <- xgb.cv(
+    params = params,
+    data = dtrain,
+    nrounds = 400,
+    nfold = 3,
+    early_stopping_rounds = 20,
+    verbose = FALSE
+  )
+  
+  best_iter <- ifelse(
+    is.null(cv$best_iteration),
+    nrow(cv$evaluation_log),
+    cv$best_iteration
+  )
+  
+  best_rmse <- min(cv$evaluation_log$test_rmse_mean, na.rm = TRUE)
+  
+  results <- rbind(
+    results,
+    data.frame(
+      eta = params$eta,
+      max_depth = params$max_depth,
+      min_child_weight = params$min_child_weight,
+      subsample = params$subsample,
+      colsample_bytree = params$colsample_bytree,
+      gamma = params$gamma,
+      best_iter = best_iter,
+      cv_rmse = best_rmse
+    )
+  )
+  
+  setTxtProgressBar(pb, i)
+}
+close(pb)
+
+cat("\nRandom Search Completed.\n")
+
+# ==========================
+# Select Best Parameters
+# ==========================
+
+best_idx <- which.min(results$cv_rmse)
+best <- results[best_idx, ]
+cat("\n--- BEST XGBOOST PARAMETERS (RANDOM SEARCH) ---\n")
+print(best)
+```
+
+##### 11B.2.3 Train Final XGBoost Regression and Evaluate on Test Set
+
+```{r}
+best_params <- list(
+  objective = "reg:squarederror",
+  eta = best$eta,
+  max_depth = best$max_depth,
+  min_child_weight = best$min_child_weight,
+  subsample = best$subsample,
+  colsample_bytree = best$colsample_bytree,
+  gamma = best$gamma
+)
+
+best_nrounds <- best$best_iter + 30
+
+
+# ==============================
+# Train FINAL XGBOOST MODEL
+# ==============================
+
+cat("\nTraining Final XGBoost Model...\n")
+
+final_xgb <- xgb.train(
+  params = best_params,
+  data = dtrain,
+  nrounds = best_nrounds,
+  watchlist = list(valid = dvalid),
+  early_stopping_rounds = 20,
+  print_every_n = 50
+)
+
+# ==========================
+# Evaluate FINAL Model
+# ==========================
+
+pred_xgb <- predict(final_xgb, dtest)
+
+xgb_rmse <- rmse(y_test, pred_xgb)
+xgb_mae  <- mae(y_test, pred_xgb)
+xgb_mape <- mape(y_test, pred_xgb)
+xgb_r2   <- 1 - sum((y_test - pred_xgb)^2) / sum((y_test - mean(y_test))^2)
+n <- length(y_test)
+p <- ncol(X_test)
+xgb_adj_r2 <- 1 - ((1 - xgb_r2) * (n - 1) / (n - p - 1))
+
+cat("\n=========== XGBOOST REGRESSION PERFORMANCE (TEST SET) ===========\n")
+cat(sprintf(
+  "RMSE: %.4f | MAE: %.4f | MAPE: %.2f%% | R²: %.4f | Adj R²: %.4f\n",
+  xgb_rmse, xgb_mae, xgb_mape, xgb_r2, xgb_adj_r2
+))
+```
+
+#### Regression Summary
+Overall, the regression task compares Random Forest regression and XGBoost regression for predicting BMI.
+Performance is evaluated using both error-based metrics (RMSE, MAE, MAPE) and goodness-of-fit metrics (R², Adjusted R²).
+The results provide evidence on how demographic, lifestyle, and chronic condition indicators relate to BMI variation within the dataset.
+
