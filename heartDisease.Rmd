@@ -2,7 +2,12 @@
 title: "Heart Disease Analysis Report"
 author: "Chan Li Yang Gideon Looi Khoo Phei Ying Ng Jing Lee Ng Wei Khang"
 date: "2025-12-15"
-output: html_document
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+
 ---
 
 ```{r setup, include=FALSE}
@@ -51,7 +56,7 @@ library(Metrics)
 The dataset is imported from a CSV file and inspected to understand its structure, variable types, and overall distribution.
 
 ```{r}
-df <- read.csv("C://Users//User//heartDisease//heart_disease.csv")
+df <- read.csv("C://Users//Wei Khang//heartDisease//heart_disease.csv")
 
 head(df)
 dim(df)
@@ -60,9 +65,13 @@ summary(df)
 ```
 
 ## 4. Data Quality Checks
+
 This section checks common data issues (missing values and duplicates) before cleaning.
+
 ### 4.1 Missing Values
+
 Missing values are examined at both the column level and the dataset level to determine the extent of incomplete records.
+
 ```{r}
 colSums(is.na(df))
 sum(is.na(df))
@@ -86,7 +95,7 @@ df_clean <- df
 df_clean <- df_clean %>% drop_na()
 ```
 
-## 5.2 Remove duplicates
+### 5.2 Remove duplicates
 ```{r}
 df_clean <- df_clean %>% distinct()
 ```
@@ -927,19 +936,19 @@ pred <- ifelse(pred_prob > 0.5, 1, 0)
 pred_factor <- factor(pred, levels = c(0, 1))
 test_factor <- factor(test_y_num, levels = c(0, 1))
 
-conf <- table(Predicted = pred_factor, Actual = test_factor)
+lightGBM_conf <- table(Predicted = pred_factor, Actual = test_factor)
 
-acc <- mean(pred == test_y_num)
-prec <- caret::precision(pred_factor, test_factor)
-rec <- caret::recall(pred_factor, test_factor)
-f1 <- caret::F_meas(pred_factor, test_factor)
-auc <- auc(test_y_num, pred_prob)
+lightGBM_acc <- mean(pred == test_y_num)
+lightGBM_prec <- caret::precision(pred_factor, test_factor)
+lightGBM_rec <- caret::recall(pred_factor, test_factor)
+lightGBM_f1 <- caret::F_meas(pred_factor, test_factor)
+lightGBM_auc <- auc(test_y_num, pred_prob)
 
 cat("\n================ FINAL LIGHTGBM PERFORMANCE ================\n")
-print(conf)
+print(lightGBM_conf)
 cat(sprintf(
   "\nAccuracy: %.4f\nPrecision: %.4f\nRecall: %.4f\nF1 Score: %.4f\nAUC: %.4f\n",
-  acc, prec, rec, f1, auc
+  lightGBM_acc, lightGBM_prec, lightGBM_rec, lightGBM_f1, lightGBM_auc
 ))
 ```
 
@@ -1084,15 +1093,15 @@ cat(sprintf(
 ))
 ```
 
+#### Classification Summary
+This classification task compares LightGBM (SMOTE + Bayesian Optimization) and XGBoost (class weighting + Bayesian Optimization) for predicting heart disease. Performance is evaluated on the test set using Accuracy, Precision, Recall, F1-score, and AUC to determine which approach handles class imbalance better.
+
 ### 11B. Regression Modelling
 This section develops regression models to predict **BMI** as a continuous outcome. Two ensemble approaches are evaluated:
 1. **Random Forest Regression (Ranger)** tuned using Bayesian Optimization.
 2. **XGBoost Regression** tuned using Random Search with cross-validation.
 
 Both models are evaluated on the test set using RMSE, MAE, MAPE, R², and Adjusted R².
-
-#### Classification Summary
-
 
 #### 11B.1 Random Forest Regression (Ranger) with Bayesian Optimization
 ##### 11B.1.1 Evaluation Metric Definition
@@ -1360,3 +1369,80 @@ Overall, the regression task compares Random Forest regression and XGBoost regre
 Performance is evaluated using both error-based metrics (RMSE, MAE, MAPE) and goodness-of-fit metrics (R², Adjusted R²).
 The results provide evidence on how demographic, lifestyle, and chronic condition indicators relate to BMI variation within the dataset.
 
+## 12. Evaluation
+
+### 12A.1 Classification comparison
+
+This table compares LightGBM and XGBoost on the heart disease classification task using test-set Accuracy, Precision, Recall, F1-score, and AUC.
+
+```{r}
+clf_compare <- tibble(
+  Model = c("LightGBM (SMOTE + BO)", "XGBoost (Class Weight + BO)"),
+  Accuracy  = c(lightGBM_acc, xgb_acc),
+  Precision = c(lightGBM_prec, xgb_prec),
+  Recall    = c(lightGBM_rec, xgb_rec),
+  F1        = c(lightGBM_f1, xgb_f1),
+  AUC       = c(as.numeric(lightGBM_auc), as.numeric(xgb_auc))
+) %>%
+  mutate(across(-Model, ~ round(.x, 4)))
+
+clf_compare
+```
+
+### 12A.2 Classification comparison
+
+This bar chart visualizes the classification metrics for both models to make performance differences easier to compare.
+
+```{r}
+clf_long <- clf_compare %>%
+  pivot_longer(-Model, names_to = "Metric", values_to = "Value")
+
+ggplot(clf_long, aes(x = Metric, y = Value, fill = Model)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Classification Model Comparison (Test Set)",
+    x = "Metric", y = "Score"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+#### Conclusion
+Based on the test-set results, LightGBM (SMOTE + BO) achieves higher Accuracy, Recall, and F1-score, indicating stronger overall performance and better detection of heart disease cases. In contrast, XGBoost (Class Weight + BO) attains slightly higher Precision and AUC, suggesting better discrimination and fewer false positives. Overall, LightGBM is more suitable when prioritizing correct identification of heart disease cases, while XGBoost may be preferred when precision is more critical.
+
+### 12B.1 Regression comparison
+
+This table compares Ranger Random Forest and XGBoost on the BMI regression task using test-set RMSE, MAE, MAPE, R², and Adjusted R².
+
+```{r}
+reg_compare <- tibble(
+  Model = c("Random Forest (Ranger + BO)", "XGBoost (Random Search + CV)"),
+  RMSE   = c(rf_rmse, xgb_rmse),
+  MAE    = c(rf_mae,  xgb_mae),
+  MAPE   = c(rf_mape, xgb_mape),
+  R2     = c(rf_r2,   xgb_r2),
+  Adj_R2 = c(rf_adj_r2, xgb_adj_r2)
+) %>%
+  mutate(across(-Model, ~ round(.x, 4)))
+
+reg_compare
+```
+
+### 12B.2 Regression comparison
+
+This bar chart visualizes the regression metrics for both models to clearly show which model performs better across each metric.
+
+```{r}
+reg_long <- reg_compare %>%
+  pivot_longer(-Model, names_to = "Metric", values_to = "Value")
+
+ggplot(reg_long, aes(x = Metric, y = Value, fill = Model)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Regression Model Comparison (Test Set)",
+    x = "Metric", y = "Value"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+#### Conclusion
+For the BMI regression task, Random Forest (Ranger + BO) and XGBoost (Random Search + CV) show very similar performance across all metrics. Random Forest achieves marginally lower RMSE, MAE, and MAPE, indicating slightly better prediction accuracy, while XGBoost attains a slightly higher R² and Adjusted R², suggesting comparable explanatory power. Overall, both models perform similarly, with Random Forest offering a small advantage in error reduction.
