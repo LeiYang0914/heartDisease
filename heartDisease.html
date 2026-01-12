@@ -1502,6 +1502,25 @@ quality checks, preprocessing, feature engineering, exploratory
 analysis, correlation screening, train/validation/test split,
 normalization, modelling, and evaluation.</p>
 </div>
+<div id="objectives" class="section level2">
+<h2>1.1 Objectives</h2>
+<ol style="list-style-type: decimal">
+<li><p><strong>Heart Disease Classification:</strong> Develop and
+evaluate ML classification models to predict <strong>Heart Disease
+(Yes/No)</strong> using health indicators and lifestyle
+determinants.</p></li>
+<li><p><strong>BMI Regression:</strong> Apply ML regression techniques
+to predict <strong>BMI (continuous)</strong> using relevant lifestyle
+and health-related features.</p></li>
+<li><p><strong>Determinant Analysis:</strong> Quantitatively assess the
+importance of key socioeconomic and behavioral variables (e.g.,
+education, income, smoking, physical activity, diet) for both
+tasks.</p></li>
+<li><p><strong>Actionable Insights:</strong> Translate the most
+influential determinants into clear, prioritized, evidence-based
+recommendations for public health and clinical intervention.</p></li>
+</ol>
+</div>
 <div id="load-libraries" class="section level2">
 <h2>2. Load Libraries</h2>
 <p>This section loads the R libraries required for data manipulation,
@@ -2683,7 +2702,7 @@ opt_results &lt;- bayesOpt(
 )</code></pre>
 <pre><code>## 
 ## Running initial scoring function 8 times in 1 thread(s)...</code></pre>
-<pre><code>##         8.87 seconds
+<pre><code>##         16.81 seconds
 ##   3) Running FUN 1 times in 1 thread(s)...</code></pre>
 <pre class="r"><code>cat(&quot;\n========== BEST BAYESIAN OPT PARAMETERS ==========\n&quot;)</code></pre>
 <pre><code>## 
@@ -3287,9 +3306,9 @@ evaluated using standard regression metrics.</p>
   min.node.size = as.integer(best_params_rf$min_node_size),
   sample.fraction = best_params_rf$sample_fraction,
   importance = &quot;impurity&quot;
-)
-
-# =================
+)</code></pre>
+<pre><code>## Growing trees.. Progress: 76%. Estimated remaining time: 9 seconds.</code></pre>
+<pre class="r"><code># =================
 #  Predictions
 # =================
 
@@ -3606,6 +3625,45 @@ Overall, both models perform similarly, with Random Forest offering a
 small advantage in error reduction.</p>
 </div>
 </div>
+</div>
+<div id="conclusion-10" class="section level2">
+<h2>13. Conclusion</h2>
+<ul>
+<li>Machine learning methodologies are effective for analysing
+large-scale public health datasets.</li>
+<li>Predictive models built using the BRFSS dataset successfully
+addressed:
+<ul>
+<li>Heart disease classification</li>
+<li>BMI regression</li>
+</ul></li>
+<li>Behavioural, lifestyle, and socioeconomic factors were identified as
+significant predictors of:
+<ul>
+<li>Cardiovascular disease risk</li>
+<li>Obesity-related outcomes</li>
+</ul></li>
+<li>Key modifiable lifestyle factors influencing health outcomes
+include:
+<ul>
+<li>Physical activity</li>
+<li>Smoking behaviour</li>
+<li>Dietary choices</li>
+<li>Socioeconomic status</li>
+</ul></li>
+<li>Findings extend beyond descriptive analysis by providing empirical
+evidence to support:
+<ul>
+<li>Targeted prevention and intervention strategies</li>
+</ul></li>
+<li>Machine learning approaches demonstrate strong potential to enhance
+public health decision-making through:
+<ul>
+<li>Improved predictive accuracy</li>
+<li>Early identification of high-risk individuals</li>
+<li>Support for evidence-based policy development</li>
+</ul></li>
+</ul>
 </div>
 
 

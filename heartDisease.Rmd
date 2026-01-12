@@ -29,6 +29,16 @@ This report analyzes a heart disease health indicators dataset and builds two pr
 
 The workflow follows a standard data science pipeline: data loading, quality checks, preprocessing, feature engineering, exploratory analysis, correlation screening, train/validation/test split, normalization, modelling, and evaluation.
 
+## 1.1 Objectives
+
+1. **Heart Disease Classification:** Develop and evaluate ML classification models to predict **Heart Disease (Yes/No)** using health indicators and lifestyle determinants.  
+
+2. **BMI Regression:** Apply ML regression techniques to predict **BMI (continuous)** using relevant lifestyle and health-related features.  
+
+3. **Determinant Analysis:** Quantitatively assess the importance of key socioeconomic and behavioral variables (e.g., education, income, smoking, physical activity, diet) for both tasks.  
+
+4. **Actionable Insights:** Translate the most influential determinants into clear, prioritized, evidence-based recommendations for public health and clinical intervention.
+
 ## 2. Load Libraries
 
 This section loads the R libraries required for data manipulation, visualization, statistical analysis, and machine learning.
@@ -1446,3 +1456,24 @@ ggplot(reg_long, aes(x = Metric, y = Value, fill = Model)) +
 
 #### Conclusion
 For the BMI regression task, Random Forest (Ranger + BO) and XGBoost (Random Search + CV) show very similar performance across all metrics. Random Forest achieves marginally lower RMSE, MAE, and MAPE, indicating slightly better prediction accuracy, while XGBoost attains a slightly higher R² and Adjusted R², suggesting comparable explanatory power. Overall, both models perform similarly, with Random Forest offering a small advantage in error reduction.
+
+## 13. Conclusion
+
+- Machine learning methodologies are effective for analysing large-scale public health datasets.
+- Predictive models built using the BRFSS dataset successfully addressed:
+  - Heart disease classification
+  - BMI regression
+- Behavioural, lifestyle, and socioeconomic factors were identified as significant predictors of:
+  - Cardiovascular disease risk
+  - Obesity-related outcomes
+- Key modifiable lifestyle factors influencing health outcomes include:
+  - Physical activity
+  - Smoking behaviour
+  - Dietary choices
+  - Socioeconomic status
+- Findings extend beyond descriptive analysis by providing empirical evidence to support:
+  - Targeted prevention and intervention strategies
+- Machine learning approaches demonstrate strong potential to enhance public health decision-making through:
+  - Improved predictive accuracy
+  - Early identification of high-risk individuals
+  - Support for evidence-based policy development
